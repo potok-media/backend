@@ -397,5 +397,5 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
-Potok.Backend.Gateway/settings.sqlite
-Potok.Backend.SearchEngine/config.local.yml
+src/Potok.Backend.Gateway/settings.sqlite
+src/Potok.Backend.SearchEngine/config.local.yml
