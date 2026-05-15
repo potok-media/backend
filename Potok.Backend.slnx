@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="Potok.Backend.Gateway\Potok.Backend.Gateway.csproj" />
+    <Project Path="Potok.Backend.SearchEngine\Potok.Backend.SearchEngine.csproj" />
+  </Folder>
+  <Project Path="Potok.Backend.Core\Potok.Backend.Core.csproj" />
+  <Project Path="Potok.Backend.Infrastructure/Potok.Backend.Infrastructure.csproj" />
+</Solution>
