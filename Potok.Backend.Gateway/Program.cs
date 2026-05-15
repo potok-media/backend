@@ -20,6 +20,18 @@ if (app.Environment.IsDevelopment())
 }
 
 // app.UseHttpsRedirection();
+app.Use(async (context, next) =>
+{
+    // For public media, we strip the Authorization header to ensure ResponseCaching can work.
+    // ASP.NET Core Response Caching doesn't cache requests with Authorization headers by default.
+    if (context.Request.Path.StartsWithSegments("/media/tmdb"))
+    {
+        context.Request.Headers.Remove("Authorization");
+    }
+    await next();
+});
+
+app.UseResponseCaching();
 app.UseAuthorization();
 
 // Ensure DB is created on startup

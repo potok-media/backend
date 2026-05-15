@@ -171,6 +171,7 @@ public static class ServicesConfiguration
 
     public static IServiceCollection AddGatewayInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddResponseCaching();
         services.AddExceptionHandler<GlobalExceptionHandler>();
         services.AddProblemDetails();
 
