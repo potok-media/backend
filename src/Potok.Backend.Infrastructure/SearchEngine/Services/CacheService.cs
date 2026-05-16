@@ -12,6 +12,7 @@ public class CacheService : ICacheService
 {
     private readonly IMemoryCache _cache;
     private readonly Config _config;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> Locks = new();
 
     public CacheService(IMemoryCache cache, IOptions<Config> config)
     {
@@ -29,21 +30,33 @@ public class CacheService : ICacheService
         
         if (_cache.TryGetValue(key, out T cached)) return cached;
 
-        var result = await factory();
+        var semaphore = Locks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        await semaphore.WaitAsync();
 
-        var options = new MemoryCacheEntryOptions
+        try
         {
-            Size = 1024 * 1024 * 150
-        };
+            if (_cache.TryGetValue(key, out T cachedSecondPass)) return cachedSecondPass;
 
-        if (expiry.HasValue)
-            options.AbsoluteExpirationRelativeToNow = expiry.Value;
-        else
-            options.SlidingExpiration = TimeSpan.FromHours(1);
+            var result = await factory();
 
-        _cache.Set(key, result, options);
+            var options = new MemoryCacheEntryOptions
+            {
+                Size = 1024 * 1024 * 150
+            };
 
-        return result;
+            if (expiry.HasValue)
+                options.AbsoluteExpirationRelativeToNow = expiry.Value;
+            else
+                options.SlidingExpiration = TimeSpan.FromHours(1);
+
+            _cache.Set(key, result, options);
+
+            return result;
+        }
+        finally
+        {
+            semaphore.Release();
+        }
     }
 
     /// <summary>

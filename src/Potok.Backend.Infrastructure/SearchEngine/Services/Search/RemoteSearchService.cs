@@ -62,32 +62,22 @@ public class RemoteSearchService : BaseSearchService, IRemoteSearchService
         string query,
         IReadOnlyCollection<TrackerType> trackers)
     {
-        var bag = new ConcurrentBag<IReadOnlyCollection<TorrentDetails>>();
-
-        var options = new ParallelOptions
-        {
-            MaxDegreeOfParallelism = Environment.ProcessorCount
-        };
-
         _logger.Information("Search '{@Query}' on {@Trackers} trackers", query, trackers);
 
-        await Parallel.ForEachAsync(trackers, options, async (tracker, ct) =>
+        var tasks = trackers.Select(async tracker =>
         {
-            var sw = new Stopwatch();
-            sw.Start();
-            var res = await SearchTrackerSafeAsync(tracker, query, ct);
-            if (res.Count > 0)
-                bag.Add(res);
+            var sw = Stopwatch.StartNew();
+            var results = await SearchTrackerSafeAsync(tracker, query, CancellationToken.None);
             sw.Stop();
             _logger.Information("Tracker: {Tracker}; \tSW: {SW}ms", tracker, sw.ElapsedMilliseconds);
+            return results;
         });
 
-        var merged = new List<TorrentDetails>();
-        foreach (var list in bag)
-            if (list.Count > 0)
-                merged.AddRange(list);
+        var allResults = await Task.WhenAll(tasks);
 
-        return merged;
+        return allResults
+            .SelectMany(r => r)
+            .ToList();
     }
 
     private async Task<IReadOnlyCollection<TorrentDetails>> SearchTrackerSafeAsync(
