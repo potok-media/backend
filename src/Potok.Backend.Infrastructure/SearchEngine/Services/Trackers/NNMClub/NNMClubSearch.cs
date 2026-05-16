@@ -42,20 +42,14 @@ public class NNMClubSearch : BaseNNMClub
 
         var torrents = ParseTrackerPage(html, Host);
 
-        var options = new ParallelOptions
+        var tasks = torrents.Select(async torrent =>
         {
-            MaxDegreeOfParallelism = Environment.ProcessorCount
-        };
+            await _torrentRepository.AddOrUpdateAsync(
+                [torrent],
+                FetchDetailsAsync);
+        });
 
-        await Parallel.ForEachAsync(
-            torrents,
-            options,
-            async (torrent, _) =>
-            {
-                await _torrentRepository.AddOrUpdateAsync(
-                    [torrent],
-                    FetchDetailsAsync);
-            });
+        await Task.WhenAll(tasks);
 
         return torrents;
     }

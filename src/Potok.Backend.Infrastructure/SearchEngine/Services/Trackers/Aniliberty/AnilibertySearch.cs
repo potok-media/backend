@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Enums;
@@ -30,22 +29,14 @@ public class AnilibertySearch : BaseTrackerSearch
         if (releases.Count == 0)
             return [];
 
-        var torrents = new ConcurrentBag<TorrentDetails>();
-
-        await Parallel.ForEachAsync(releases, async (release, _) =>
+        var tasks = releases.Select(async release =>
         {
             var releaseTorrents = await FetchReleaseTorrentsAsync(release.Id);
-            if (releaseTorrents.Count == 0)
-                return;
-
-            foreach (var t in releaseTorrents)
-            {
-                var item = releases.FirstOrDefault(r => r.Id == release.Id);
-                torrents.Add(Map(release, t, item?.Name, item?.OriginalName));
-            }
+            return releaseTorrents.Select(t => Map(release, t, release.Name, release.OriginalName));
         });
 
-        return torrents;
+        var results = await Task.WhenAll(tasks);
+        return results.SelectMany(r => r).ToList();
     }
 
     private async Task<List<ReleaseDto>> SearchReleasesAsync(string query)

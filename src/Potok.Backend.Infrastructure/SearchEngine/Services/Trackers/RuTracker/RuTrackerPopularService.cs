@@ -26,6 +26,7 @@ public class RuTrackerPopularService : BaseRuTracker
         var categories = Config.RuTracker.Popular.Categories;
         var now = DateTime.UtcNow;
 
+        var semaphore = new SemaphoreSlim(3);
         foreach (var category in categories)
         {
             var url = BuildCategoryUrl(Host, category.ToString(), 0);
@@ -36,19 +37,21 @@ public class RuTrackerPopularService : BaseRuTracker
                 /*useProxy: useProxy*/);
             var torrents = ParseForumPage(html, category.ToString(), Host, now);
 
-            var options = new ParallelOptions
+            var tasks = torrents.Select(async torrent =>
             {
-                MaxDegreeOfParallelism = Environment.ProcessorCount
-            };
-            await Parallel.ForEachAsync(
-                torrents,
-                options,
-                async (torrent, _) =>
+                await semaphore.WaitAsync();
+                try
                 {
                     await _torrentRepository.AddOrUpdateAsync(
                         [torrent],
                         FetchDetailsAsync);
-                });
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
+            await Task.WhenAll(tasks);
 
             var maxPage = GetMaxPages(html);
             if (maxPage == 0) continue;
@@ -62,15 +65,21 @@ public class RuTrackerPopularService : BaseRuTracker
                 url = BuildCategoryUrl(Host, category.ToString(), page);
                 torrents = await FetchForumPageAsync(url, category.ToString(), now);
 
-                await Parallel.ForEachAsync(
-                    torrents,
-                    options,
-                    async (torrent, _) =>
+                var pageTasks = torrents.Select(async torrent =>
+                {
+                    await semaphore.WaitAsync();
+                    try
                     {
                         await _torrentRepository.AddOrUpdateAsync(
                             [torrent],
                             FetchDetailsAsync);
-                    });
+                    }
+                    finally
+                    {
+                        semaphore.Release();
+                    }
+                });
+                await Task.WhenAll(pageTasks);
             }
         }
     }

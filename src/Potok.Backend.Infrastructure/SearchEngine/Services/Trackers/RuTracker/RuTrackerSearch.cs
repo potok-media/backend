@@ -33,20 +33,14 @@ public sealed class RuTrackerSearch : BaseRuTracker
         foreach (var item in parsed)
             results[item.Url] = item;
 
-        var options = new ParallelOptions
+        var tasks = results.Values.Select(async torrent =>
         {
-            MaxDegreeOfParallelism = Environment.ProcessorCount
-        };
+            await _torrentRepository.AddOrUpdateAsync(
+                [torrent],
+                FetchDetailsAsync);
+        });
 
-        await Parallel.ForEachAsync(
-            results.Values,
-            options,
-            async (torrent, _) =>
-            {
-                await _torrentRepository.AddOrUpdateAsync(
-                    [torrent],
-                    FetchDetailsAsync);
-            });
+        await Task.WhenAll(tasks);
 
         return results.Values.ToList();
     }

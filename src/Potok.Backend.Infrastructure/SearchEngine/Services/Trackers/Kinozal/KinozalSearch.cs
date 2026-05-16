@@ -32,20 +32,14 @@ public class KinozalSearch : BaseKinozal
         if (results.Count == 0)
             return [];
 
-        var options = new ParallelOptions
+        var tasks = results.Select(async torrent =>
         {
-            MaxDegreeOfParallelism = Environment.ProcessorCount
-        };
+            await _torrentRepository.AddOrUpdateAsync(
+                [torrent],
+                FetchDetailsAsync);
+        });
 
-        await Parallel.ForEachAsync(
-            results,
-            options,
-            async (torrent, _) =>
-            {
-                await _torrentRepository.AddOrUpdateAsync(
-                    [torrent],
-                    FetchDetailsAsync);
-            });
+        await Task.WhenAll(tasks);
 
         return results;
     }

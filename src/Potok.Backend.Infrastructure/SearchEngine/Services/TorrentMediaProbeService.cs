@@ -44,22 +44,18 @@ public sealed class TorrentMediaProbeService : ITorrentMediaProbeService
         var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var cancellationToken = cancellationTokenSource.Token;
 
-        var options = new ParallelOptions
+        var semaphore = new SemaphoreSlim(5);
+        var tasks = torrents.Select(async torrent =>
         {
-            MaxDegreeOfParallelism = Environment.ProcessorCount,
-            CancellationToken = cancellationToken
-        };
-
-        await Parallel.ForEachAsync(torrents, options, async (torrent, _) =>
-        {
-            if (string.IsNullOrWhiteSpace(torrent.Magnet))
-            {
-                await _torrentRepository.IncrementMediaProbeAttemptsAsync(torrent.Url);
-                return;
-            }
-
+            await semaphore.WaitAsync(cancellationToken);
             try
             {
+                if (string.IsNullOrWhiteSpace(torrent.Magnet))
+                {
+                    await _torrentRepository.IncrementMediaProbeAttemptsAsync(torrent.Url);
+                    return;
+                }
+
                 var response = await RunFfprobeAsync(torrent.Magnet, cancellationToken);
                 var streams = response?.Streams;
                 if (streams == null || streams.Count == 0)
@@ -81,7 +77,13 @@ public sealed class TorrentMediaProbeService : ITorrentMediaProbeService
                 _logger.LogDebug(ex, "Failed to probe torrent {Url}", torrent.Url);
                 await _torrentRepository.IncrementMediaProbeAttemptsAsync(torrent.Url);
             }
+            finally
+            {
+                semaphore.Release();
+            }
         });
+
+        await Task.WhenAll(tasks);
     }
 
     private void NormalizeStreamTitles(List<FfStream> streams)
