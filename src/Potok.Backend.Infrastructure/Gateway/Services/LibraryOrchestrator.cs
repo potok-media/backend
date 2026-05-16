@@ -105,14 +105,22 @@ public class LibraryOrchestrator : ILibraryOrchestrator
             .OrderByDescending(s => s.LastWatchedAt)
             .Take(30)
             .Select(async s => {
-                if (s.Show?.Ids?.Slug != null) {
+                if (s.Show?.Ids?.Slug != null && s.Show.Ids.Tmdb != null) {
                     var progress = await _traktClient.GetShowProgressAsync(s.Show.Ids.Slug, accessToken);
-                    if (progress?.NextEpisode != null && s.Show.Ids.Tmdb != null) {
+                    if (progress?.NextEpisode != null) {
                         var tmdb = await _tmdbClient.GetAsync<TmdbTvShow>($"tv/{s.Show.Ids.Tmdb}");
                         if (tmdb != null) {
                             var card = MediaMapper.MapToMediaCard(tmdb, baseUrl);
                             return card with { 
-                                BadgeText = $"S{progress.NextEpisode.Season:D2}E{progress.NextEpisode.Number:D2}" 
+                                NextEpisodeNumber = progress.NextEpisode.Number,
+                                NextEpisodeSeason = progress.NextEpisode.Season,
+                                NextEpisodeTitle = progress.NextEpisode.Title,
+                                Progress = new WatchProgress(
+                                    Aired: progress.Aired,
+                                    Completed: progress.Completed,
+                                    NextSeason: progress.NextEpisode.Season,
+                                    NextEpisode: progress.NextEpisode.Number
+                                )
                             };
                         }
                     }
