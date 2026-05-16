@@ -1,3 +1,4 @@
+using System.Threading;
 using Potok.Backend.Core.Enums;
 using Potok.Backend.Core.Models.Details;
 
@@ -16,5 +17,5 @@ public interface ITrackerSearch
     ///     Выполняет поиск по строке запроса на выбранном трекере.
     /// </summary>
     Task<IReadOnlyCollection<TorrentDetails>> SearchAsync(
-        string query);
+        string query, CancellationToken ct = default);
 }

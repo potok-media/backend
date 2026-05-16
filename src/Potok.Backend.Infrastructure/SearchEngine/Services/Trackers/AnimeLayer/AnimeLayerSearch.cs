@@ -5,7 +5,7 @@ using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
-using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.AnimeLayer;
 
@@ -15,7 +15,7 @@ public class AnimeLayerSearch : BaseAnimeLayer
 
     public AnimeLayerSearch(
         ICacheService cacheService,
-        HttpService httpService,
+        TrackerHttpClient httpService,
         IOptionsSnapshot<Config> config,
         ITorrentRepository torrentRepository)
         : base(cacheService, httpService, config)
@@ -23,13 +23,13 @@ public class AnimeLayerSearch : BaseAnimeLayer
         _torrentRepository = torrentRepository;
     }
 
-    public override async Task<IReadOnlyCollection<TorrentDetails>> SearchAsync(string query)
+    public override async Task<IReadOnlyCollection<TorrentDetails>> SearchAsync(string query, CancellationToken ct = default)
     {
         if (!Config.AnimeLayer.EnableSearch)
             return [];
 
         var url = $"{Host}/torrents/anime/?q={Uri.EscapeDataString(query)}";
-        var html = await Get(url, url);
+        var html = await Get(url, url, ct);
 
         if (string.IsNullOrWhiteSpace(html) || !html.Contains("id=\"wrapper\""))
             return [];
@@ -40,7 +40,8 @@ public class AnimeLayerSearch : BaseAnimeLayer
         {
             await _torrentRepository.AddOrUpdateAsync(
                 [torrent],
-                FetchDetailsAsync);
+                (t, token) => FetchDetailsAsync(t, token),
+                ct);
         });
 
         await Task.WhenAll(tasks);

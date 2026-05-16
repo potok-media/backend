@@ -1,11 +1,13 @@
 using System.Globalization;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Enums;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
-using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Trackers;
 
@@ -14,9 +16,9 @@ public abstract class BaseTrackerSearch : ITrackerRefreshProvider
     protected static readonly Encoding RuEncoding = Encoding.GetEncoding("windows-1251");
     protected readonly ICacheService CacheService;
     protected readonly Config Config;
-    protected readonly HttpService HttpService;
+    protected readonly TrackerHttpClient HttpService;
 
-    protected BaseTrackerSearch(IOptions<Config> config, HttpService httpService, ICacheService cacheService)
+    protected BaseTrackerSearch(IOptions<Config> config, TrackerHttpClient httpService, ICacheService cacheService)
     {
         HttpService = httpService;
         CacheService = cacheService;
@@ -27,7 +29,7 @@ public abstract class BaseTrackerSearch : ITrackerRefreshProvider
     public abstract string TrackerName { get; }
     public abstract string Host { get; }
 
-    public virtual Task<IReadOnlyCollection<TorrentDetails>> SearchAsync(string query)
+    public virtual Task<IReadOnlyCollection<TorrentDetails>> SearchAsync(string query, CancellationToken ct = default)
     {
         return Task.FromResult<IReadOnlyCollection<TorrentDetails>>([]);
     }

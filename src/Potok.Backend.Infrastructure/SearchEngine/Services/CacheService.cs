@@ -28,14 +28,14 @@ public class CacheService : ICacheService
         if (!_config.Cache.Enable)
             return await factory();
         
-        if (_cache.TryGetValue(key, out T cached)) return cached;
+        if (_cache.TryGetValue(key, out T? cached) && cached != null) return cached;
 
         var semaphore = Locks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await semaphore.WaitAsync();
 
         try
         {
-            if (_cache.TryGetValue(key, out T cachedSecondPass)) return cachedSecondPass;
+            if (_cache.TryGetValue(key, out T? cachedSecondPass) && cachedSecondPass != null) return cachedSecondPass;
 
             var result = await factory();
 

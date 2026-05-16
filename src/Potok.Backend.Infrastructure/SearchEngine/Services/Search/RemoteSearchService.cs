@@ -10,6 +10,7 @@ using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
 using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 using Serilog;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Search;
@@ -22,7 +23,7 @@ public class RemoteSearchService : BaseSearchService, IRemoteSearchService
 
     private static readonly ConcurrentDictionary<TrackerType, ResiliencePipeline<IReadOnlyCollection<TorrentDetails>>> Pipelines = new();
 
-    public RemoteSearchService(IOptions<Config> config, HttpService httpService, ICacheService cacheService, ILogger logger,
+    public RemoteSearchService(IOptions<Config> config, TrackerHttpClient httpService, ICacheService cacheService, ILogger logger,
         IEnumerable<ITrackerSearch> providers) : base(config.Value, httpService, cacheService)
     {
         _cacheService = cacheService;
@@ -92,7 +93,7 @@ public class RemoteSearchService : BaseSearchService, IRemoteSearchService
 
         try
         {
-            return await pipeline.ExecuteAsync(async token => await provider.SearchAsync(query), ct);
+            return await pipeline.ExecuteAsync(async token => await provider.SearchAsync(query, token), ct);
         }
         catch (BrokenCircuitException)
         {

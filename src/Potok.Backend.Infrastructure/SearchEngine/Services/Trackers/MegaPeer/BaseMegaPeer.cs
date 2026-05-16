@@ -7,7 +7,7 @@ using Potok.Backend.Core.Enums;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
-using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.MegaPeer;
 
@@ -15,7 +15,7 @@ public class BaseMegaPeer : BaseTrackerSearch, ITrackerCatalogEnricher
 {
     private readonly HtmlParser _parser = new();
 
-    public BaseMegaPeer(IOptions<Config> config, HttpService httpService, ICacheService cacheService) : base(config, httpService, cacheService)
+    public BaseMegaPeer(IOptions<Config> config, TrackerHttpClient httpService, ICacheService cacheService) : base(config, httpService, cacheService)
     {
     }
 
@@ -25,12 +25,12 @@ public class BaseMegaPeer : BaseTrackerSearch, ITrackerCatalogEnricher
 
     public string SearchUrl => $"{Host}browse.php";
     
-    public async Task<bool> FetchDetailsAsync(TorrentDetails torrent)
+    public async Task<bool> FetchDetailsAsync(TorrentDetails torrent, CancellationToken ct)
     {
         if (torrent == null || string.IsNullOrWhiteSpace(torrent.Url))
             return false;
 
-        var html = await HttpService.GetStringAsync(torrent.Url, new RequestOptions { Referer = torrent.Url });
+        var html = await HttpService.GetStringAsync(torrent.Url, referer: torrent.Url, ct: ct);
         if (string.IsNullOrWhiteSpace(html))
             return false;
 

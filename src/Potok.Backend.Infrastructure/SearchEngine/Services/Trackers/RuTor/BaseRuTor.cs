@@ -8,6 +8,7 @@ using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
 using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.RuTor;
 
@@ -15,7 +16,7 @@ public class BaseRuTor : BaseTrackerSearch, ITrackerCatalogEnricher
 {
     private readonly HtmlParser _parser = new();
 
-    protected BaseRuTor(IOptions<Config> config, HttpService httpService, ICacheService cacheService) : base(config,
+    protected BaseRuTor(IOptions<Config> config, TrackerHttpClient httpService, ICacheService cacheService) : base(config,
         httpService, cacheService)
     {
     }
@@ -25,12 +26,12 @@ public class BaseRuTor : BaseTrackerSearch, ITrackerCatalogEnricher
     public override string Host => "http://rutor.info/";
     protected string SearchUrl => $"{Host}search/0/0/100/2/";
 
-    public async Task<bool> FetchDetailsAsync(TorrentDetails torrent)
+    public async Task<bool> FetchDetailsAsync(TorrentDetails torrent, CancellationToken ct)
     {
         if (torrent == null || string.IsNullOrWhiteSpace(torrent.Url))
             return false;
 
-        var html = await HttpService.GetStringAsync(torrent.Url, new RequestOptions { Referer = torrent.Url });
+        var html = await HttpService.GetStringAsync(torrent.Url, referer: torrent.Url, ct: ct);
         if (string.IsNullOrWhiteSpace(html))
             return false;
 

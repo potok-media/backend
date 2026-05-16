@@ -4,6 +4,7 @@ using Potok.Backend.Core.Models.Api;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
 using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Search;
 
@@ -19,7 +20,7 @@ public class SearchService : BaseSearchService, ISearchService
 
     public SearchService(
         IOptions<Config> config,
-        HttpService httpService,
+        TrackerHttpClient httpService,
         ICacheService cacheService,
         ILocalSearchService localSearch,
         IRemoteSearchService remoteSearch,

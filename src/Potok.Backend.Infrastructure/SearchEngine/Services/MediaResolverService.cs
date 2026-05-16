@@ -1,9 +1,11 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Options;
 using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services;
 
@@ -11,11 +13,11 @@ public class MediaResolverService : IMediaResolverService
 {
     private readonly ICacheService _cacheService;
     private readonly Config _config;
-    private readonly HttpService _httpService;
+    private readonly TrackerHttpClient _httpService;
 
     public MediaResolverService(
         ICacheService cacheService,
-        HttpService httpService,
+        TrackerHttpClient httpService,
         IOptions<Config> config)
     {
         _cacheService = cacheService;
@@ -45,12 +47,23 @@ public class MediaResolverService : IMediaResolverService
                 else
                     uri = $"&tmdb={trimmedSearch}";
 
-                var response = await _httpService.GetJsonAsync<JObject>(
-                    $"https://api.alloha.tv/?token=04941a9a3ca3ac16e2b4327347bbc1{uri}",
-                    new RequestOptions { TimeoutSeconds = 8 });
-                
-                var data = response?.Value<JObject>("data");
-                return (data?.Value<string>("original_name"), data?.Value<string>("name"));
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                    var json = await _httpService.GetStringAsync(
+                        $"https://api.alloha.tv/?token=04941a9a3ca3ac16e2b4327347bbc1{uri}", 
+                        ct: cts.Token);
+                    
+                    if (string.IsNullOrWhiteSpace(json)) return (null, null);
+                    
+                    var response = JsonConvert.DeserializeObject<JObject>(json);
+                    var data = response?.Value<JObject>("data");
+                    return (data?.Value<string>("original_name"), data?.Value<string>("name"));
+                }
+                catch
+                {
+                    return (null, null);
+                }
             },
             TimeSpan.FromMinutes(_config.Cache.Expiry));
 

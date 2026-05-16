@@ -1,11 +1,12 @@
 using System.Net;
+using System.Net.Http;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Enums;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
-using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.NNMClub;
 
@@ -30,7 +31,7 @@ public class BaseNNMClub : BaseTrackerSearch, ITrackerCatalogEnricher
         };
 
 
-    protected BaseNNMClub(IOptions<Config> config, HttpService httpService, ICacheService cacheService) : base(config,
+    protected BaseNNMClub(IOptions<Config> config, TrackerHttpClient httpService, ICacheService cacheService) : base(config,
         httpService, cacheService)
     {
     }
@@ -39,12 +40,12 @@ public class BaseNNMClub : BaseTrackerSearch, ITrackerCatalogEnricher
     public override string TrackerName => "nnmclub";
     public override string Host => "https://nnmclub.to";
 
-    public async Task<bool> FetchDetailsAsync(TorrentDetails torrent)
+    public async Task<bool> FetchDetailsAsync(TorrentDetails torrent, CancellationToken ct)
     {
         if (torrent == null || string.IsNullOrWhiteSpace(torrent.Url))
             return false;
 
-        var details = await FetchTopicDetailsAsync(torrent.Url);
+        var details = await FetchTopicDetailsAsync(torrent.Url, ct);
         if (string.IsNullOrWhiteSpace(details.Magnet))
             return false;
 
@@ -124,11 +125,11 @@ public class BaseNNMClub : BaseTrackerSearch, ITrackerCatalogEnricher
         return list;
     }
 
-    private async Task<(string? Magnet, string? Title)> FetchTopicDetailsAsync(string url)
+    private async Task<(string? Magnet, string? Title)> FetchTopicDetailsAsync(string url, CancellationToken ct)
     {
         try
         {
-            var html = await HttpService.GetStringAsync(url, new RequestOptions { Encoding = RuEncoding });
+            var html = await HttpService.GetStringAsync(url, null, null, RuEncoding, true, ct);
             if (string.IsNullOrWhiteSpace(html))
                 return (null, null);
 

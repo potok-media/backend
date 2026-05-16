@@ -9,7 +9,7 @@ public interface ITorrentRepository
     Task AddOrUpdateAsync(IReadOnlyCollection<TorrentDetails> torrents);
 
     Task AddOrUpdateAsync<T>(IReadOnlyCollection<T> torrents,
-        Func<T, Task<bool>> predicate)
+        Func<T, CancellationToken, Task<bool>> predicate, CancellationToken ct)
         where T : TorrentDetails;
 
     Task<List<TorrentDetails>> GetForMediaProbeAsync(int limit, int maxAttempts,

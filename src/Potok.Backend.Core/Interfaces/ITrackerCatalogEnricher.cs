@@ -1,3 +1,5 @@
+using System.Threading;
+using System.Threading.Tasks;
 using Potok.Backend.Core.Models.Details;
 
 namespace Potok.Backend.Core.Interfaces;
@@ -10,5 +12,5 @@ public interface ITrackerCatalogEnricher
     /// <summary>
     ///     Пытается обогатить раздачу, используя уже известные записи каталога.
     /// </summary>
-    Task<bool> FetchDetailsAsync(TorrentDetails torrent);
+    Task<bool> FetchDetailsAsync(TorrentDetails torrent, CancellationToken ct);
 }

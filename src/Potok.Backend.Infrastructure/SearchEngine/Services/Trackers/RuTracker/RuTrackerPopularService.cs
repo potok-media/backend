@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Options;
-using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.RuTracker;
 
@@ -12,7 +12,7 @@ public class RuTrackerPopularService : BaseRuTracker
 {
     private readonly ITorrentRepository _torrentRepository;
 
-    public RuTrackerPopularService(IOptions<Config> config, HttpService httpService, ICacheService cacheService,
+    public RuTrackerPopularService(IOptions<Config> config, TrackerHttpClient httpService, ICacheService cacheService,
         ITorrentRepository torrentRepository) : base(config, httpService, cacheService)
     {
         _torrentRepository = torrentRepository;
@@ -33,8 +33,8 @@ public class RuTrackerPopularService : BaseRuTracker
             var html = await Get(
                 url,
                 RuEncoding,
-                url
-                /*useProxy: useProxy*/);
+                url,
+                ct: CancellationToken.None);
             var torrents = ParseForumPage(html, category.ToString(), Host, now);
 
             var tasks = torrents.Select(async torrent =>
@@ -44,7 +44,8 @@ public class RuTrackerPopularService : BaseRuTracker
                 {
                     await _torrentRepository.AddOrUpdateAsync(
                         [torrent],
-                        FetchDetailsAsync);
+                        (t, ct) => FetchDetailsAsync(t, ct),
+                        CancellationToken.None);
                 }
                 finally
                 {
@@ -63,7 +64,7 @@ public class RuTrackerPopularService : BaseRuTracker
             for (var page = 1; page < maxPages; page++)
             {
                 url = BuildCategoryUrl(Host, category.ToString(), page);
-                torrents = await FetchForumPageAsync(url, category.ToString(), now);
+                torrents = await FetchForumPageAsync(url, category.ToString(), now, CancellationToken.None);
 
                 var pageTasks = torrents.Select(async torrent =>
                 {
@@ -72,7 +73,8 @@ public class RuTrackerPopularService : BaseRuTracker
                     {
                         await _torrentRepository.AddOrUpdateAsync(
                             [torrent],
-                            FetchDetailsAsync);
+                            (t, ct) => FetchDetailsAsync(t, ct),
+                            CancellationToken.None);
                     }
                     finally
                     {

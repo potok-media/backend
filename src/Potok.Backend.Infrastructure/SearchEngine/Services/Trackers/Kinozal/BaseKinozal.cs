@@ -7,7 +7,7 @@ using Potok.Backend.Core.Enums;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
-using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.Kinozal;
 
@@ -15,7 +15,7 @@ public class BaseKinozal : BaseTrackerSearch, ITrackerCatalogEnricher
 {
     private const string CookieKey = "kinozal:cookie";
 
-    protected BaseKinozal(IOptions<Config> config, HttpService httpService, ICacheService cacheService) : base(config,
+    protected BaseKinozal(IOptions<Config> config, TrackerHttpClient httpService, ICacheService cacheService) : base(config,
         httpService, cacheService)
     {
     }
@@ -24,19 +24,19 @@ public class BaseKinozal : BaseTrackerSearch, ITrackerCatalogEnricher
     public override string TrackerName => "kinozal";
     public override string Host => "https://kinozal.tv";
 
-    public async Task<bool> FetchDetailsAsync(TorrentDetails torrent)
+    public async Task<bool> FetchDetailsAsync(TorrentDetails torrent, CancellationToken ct)
     {
         if (torrent == null || string.IsNullOrWhiteSpace(torrent.Url))
             return false;
 
-        var magnet = await FetchMagnetAsync(torrent.Url);
+        var magnet = await FetchMagnetAsync(torrent.Url, ct);
         if (!string.IsNullOrWhiteSpace(magnet))
             torrent.Magnet = magnet;
 
         return !string.IsNullOrWhiteSpace(torrent.Magnet);
     }
 
-    private async Task<string?> FetchMagnetAsync(string url)
+    private async Task<string?> FetchMagnetAsync(string url, CancellationToken ct)
     {
         try
         {
@@ -47,7 +47,7 @@ public class BaseKinozal : BaseTrackerSearch, ITrackerCatalogEnricher
             var id = idMatch.Groups[1].Value;
             var detailsUrl = $"{Host}/get_srv_details.php?id={id}&action=2";
 
-            var html = await Get(detailsUrl, null);
+            var html = await Get(detailsUrl, null, ct);
             if (string.IsNullOrWhiteSpace(html))
                 return null;
 
@@ -62,26 +62,25 @@ public class BaseKinozal : BaseTrackerSearch, ITrackerCatalogEnricher
         }
     }
 
-    protected async Task<string> Get(string url, Encoding? encoding)
+    protected async Task<string> Get(string url, Encoding? encoding, CancellationToken ct)
     {
         if (!CacheService.TryGetValue(CookieKey, out string? cookie))
-            cookie = await Authorize();
+            cookie = await Authorize(ct: ct);
 
-        var html = await HttpService.GetStringAsync(url, new RequestOptions { Encoding = encoding, Cookie = cookie });
+        var html = await HttpService.GetStringAsync(url, cookie, null, encoding, true, ct);
 
         if (string.IsNullOrWhiteSpace(html) || html.Contains("Вход в систему"))
         {
-            cookie = await Authorize(true);
-            html = await HttpService.GetStringAsync(url, new RequestOptions { Encoding = encoding, Cookie = cookie });
+            cookie = await Authorize(true, ct);
+            html = await HttpService.GetStringAsync(url, cookie, null, encoding, true, ct);
         }
 
         return html;
     }
 
-    private async Task<string> Authorize(bool reAuth = false)
+    private async Task<string> Authorize(bool reAuth = false, CancellationToken ct = default)
     {
         var login = Config.Kinozal.Authorization.Login;
-        ;
         var password = Config.Kinozal.Authorization.Password;
 
         if (string.IsNullOrWhiteSpace(login) || string.IsNullOrWhiteSpace(password))
@@ -94,7 +93,7 @@ public class BaseKinozal : BaseTrackerSearch, ITrackerCatalogEnricher
             { "returnto", "" }
         });
 
-        var response = await HttpService.PostResponseAsync($"{Host}/takelogin.php", content, new RequestOptions { AllowAutoRedirect = false });
+        var response = await HttpService.PostResponseAsync($"{Host}/takelogin.php", content, null, null, null, true, false, ct);
 
         if (response.Headers.TryGetValues("Set-Cookie", out var cookies))
         {

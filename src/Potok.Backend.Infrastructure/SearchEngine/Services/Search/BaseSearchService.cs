@@ -2,17 +2,17 @@ using Potok.Backend.Core.Enums;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
-using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Search;
 
 public abstract class BaseSearchService
 {
-    private readonly HttpService _httpService;
+    private readonly TrackerHttpClient _httpService;
     protected readonly ICacheService CacheService;
     protected readonly Config Config;
 
-    protected BaseSearchService(Config config, HttpService httpService, ICacheService cacheService)
+    protected BaseSearchService(Config config, TrackerHttpClient httpService, ICacheService cacheService)
     {
         Config = config;
         _httpService = httpService;

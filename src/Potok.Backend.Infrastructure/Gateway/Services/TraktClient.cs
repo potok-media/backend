@@ -147,7 +147,7 @@ public class TraktClient
 
             return new TraktMetadata(inWatchlist, inFavorites);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             return new TraktMetadata(false, false);
         }

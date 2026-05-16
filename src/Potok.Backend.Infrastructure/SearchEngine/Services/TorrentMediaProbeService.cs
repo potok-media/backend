@@ -8,23 +8,26 @@ using Potok.Backend.Core.Models.Options;
 using Potok.Backend.Core.Models.Tracks;
 using Potok.Backend.Core.Utils;
 
+using System.Net.Http;
+using System.Net.Http.Headers;
+
 namespace Potok.Backend.Infrastructure.SearchEngine.Services;
 
 public sealed class TorrentMediaProbeService : ITorrentMediaProbeService
 {
     private readonly Config _config;
-    private readonly HttpService _httpService;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<TorrentMediaProbeService> _logger;
     private readonly ITorrentRepository _torrentRepository;
 
     public TorrentMediaProbeService(
         ITorrentRepository torrentRepository,
-        HttpService httpService,
+        IHttpClientFactory httpClientFactory,
         ILogger<TorrentMediaProbeService> logger,
         IOptionsSnapshot<Config> config)
     {
         _torrentRepository = torrentRepository;
-        _httpService = httpService;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
         _config = config.Value;
     }
@@ -119,20 +122,16 @@ public sealed class TorrentMediaProbeService : ITorrentMediaProbeService
         var baseUri = uri.TrimEnd('/');
         var streamUrl = $"{baseUri}/stream?link={Uri.EscapeDataString(magnet)}&index=1&play";
 
+        var client = _httpClientFactory.CreateClient("NoProxy");
+        using var request = new HttpRequestMessage(HttpMethod.Get, streamUrl);
+
         var authHeader = BuildAuthHeader(_config.Ffprobe.Authorization.Login, _config.Ffprobe.Authorization.Password);
-        var headers = string.IsNullOrEmpty(authHeader)
-            ? null
-            : new Dictionary<string, string> { { "Authorization", authHeader } };
-
-        var requestOptions = new RequestOptions
+        if (!string.IsNullOrEmpty(authHeader))
         {
-            TimeoutSeconds = 180,
-            Headers = headers,
-            CancellationToken = cancellationToken,
-            UseProxy = false
-        };
+            request.Headers.TryAddWithoutValidation("Authorization", authHeader);
+        }
 
-        using var response = await _httpService.GetResponseAsync(streamUrl, requestOptions);
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
             return null;

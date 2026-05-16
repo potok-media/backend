@@ -5,12 +5,13 @@ using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
 using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.Aniliberty;
 
 public class AnilibertySearch : BaseTrackerSearch
 {
-    public AnilibertySearch(IOptions<Config> config, HttpService httpService, ICacheService cacheService) : base(config,
+    public AnilibertySearch(IOptions<Config> config, TrackerHttpClient httpService, ICacheService cacheService) : base(config,
         httpService, cacheService)
     {
     }
@@ -20,18 +21,18 @@ public class AnilibertySearch : BaseTrackerSearch
     public override string Host => "https://aniliberty.top";
 
     public override async Task<IReadOnlyCollection<TorrentDetails>> SearchAsync(
-        string query)
+        string query, CancellationToken ct = default)
     {
         if (!Config.Aniliberty.EnableSearch)
             return [];
 
-        var releases = await SearchReleasesAsync(query);
+        var releases = await SearchReleasesAsync(query, ct);
         if (releases.Count == 0)
             return [];
 
         var tasks = releases.Select(async release =>
         {
-            var releaseTorrents = await FetchReleaseTorrentsAsync(release.Id);
+            var releaseTorrents = await FetchReleaseTorrentsAsync(release.Id, ct);
             return releaseTorrents.Select(t => Map(release, t, release.Name, release.OriginalName));
         });
 
@@ -39,12 +40,12 @@ public class AnilibertySearch : BaseTrackerSearch
         return results.SelectMany(r => r).ToList();
     }
 
-    private async Task<List<ReleaseDto>> SearchReleasesAsync(string query)
+    private async Task<List<ReleaseDto>> SearchReleasesAsync(string query, CancellationToken ct)
     {
         var url = $"{Host}/api/v1/app/search/releases?query={Uri.EscapeDataString(query)}&include=id,name,year,alias";
         try
         {
-            var json = await HttpService.GetStringAsync(url, new RequestOptions { TimeoutSeconds = 10 });
+            var json = await HttpService.GetStringAsync(url, ct: ct);
             if (string.IsNullOrWhiteSpace(json))
                 return [];
 
@@ -76,13 +77,13 @@ public class AnilibertySearch : BaseTrackerSearch
         }
     }
 
-    private async Task<List<TorrentDto>> FetchReleaseTorrentsAsync(int releaseId)
+    private async Task<List<TorrentDto>> FetchReleaseTorrentsAsync(int releaseId, CancellationToken ct)
     {
         var url =
             $"{Host}/api/v1/anime/torrents/release/{releaseId}?include=id,hash,size,type,quality,label,magnet,filename,seeders,leechers,updated_at,created_at,description";
         try
         {
-            var json = await HttpService.GetStringAsync(url, new RequestOptions { TimeoutSeconds = 10 });
+            var json = await HttpService.GetStringAsync(url, ct: ct);
             if (string.IsNullOrWhiteSpace(json))
                 return [];
 

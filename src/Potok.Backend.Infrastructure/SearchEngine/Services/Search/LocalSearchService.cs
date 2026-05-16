@@ -9,6 +9,7 @@ using Potok.Backend.Core.Models.Database;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
 using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 using Potok.Backend.Infrastructure.SearchEngine.Migrations.Configurations;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Search;
@@ -22,7 +23,7 @@ public class LocalSearchService : BaseSearchService, ILocalSearchService
 
     public LocalSearchService(
         IOptions<Config> config,
-        HttpService httpService,
+        TrackerHttpClient httpService,
         ICacheService cacheService,
         string connectionString,
         ILogger<LocalSearchService> logger) : base(config.Value, httpService, cacheService)

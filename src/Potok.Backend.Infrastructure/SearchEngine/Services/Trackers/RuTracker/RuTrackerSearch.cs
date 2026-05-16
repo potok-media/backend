@@ -2,7 +2,7 @@ using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
-using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.RuTracker;
 
@@ -10,13 +10,13 @@ public sealed class RuTrackerSearch : BaseRuTracker
 {
     private readonly ITorrentRepository _torrentRepository;
 
-    public RuTrackerSearch(IOptions<Config> config, HttpService httpService, ICacheService cacheService,
+    public RuTrackerSearch(IOptions<Config> config, TrackerHttpClient httpService, ICacheService cacheService,
         ITorrentRepository torrentRepository) : base(config, httpService, cacheService)
     {
         _torrentRepository = torrentRepository;
     }
 
-    public override async Task<IReadOnlyCollection<TorrentDetails>> SearchAsync(string query)
+    public override async Task<IReadOnlyCollection<TorrentDetails>> SearchAsync(string query, CancellationToken ct = default)
     {
         if (!Config.RuTracker.EnableSearch)
             return [];
@@ -25,7 +25,7 @@ public sealed class RuTrackerSearch : BaseRuTracker
         var now = DateTime.UtcNow;
 
         var url = BuildQueryUrl(Host, query, 0);
-        var parsed = await FetchForumPageAsync(url, string.Empty, now);
+        var parsed = await FetchForumPageAsync(url, string.Empty, now, ct);
 
         if (parsed.Count == 0)
             return new List<TorrentDetails>();
@@ -37,7 +37,8 @@ public sealed class RuTrackerSearch : BaseRuTracker
         {
             await _torrentRepository.AddOrUpdateAsync(
                 [torrent],
-                FetchDetailsAsync);
+                (t, token) => FetchDetailsAsync(t, token),
+                ct);
         });
 
         await Task.WhenAll(tasks);

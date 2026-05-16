@@ -10,7 +10,7 @@ using Potok.Backend.Core.Enums;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
-using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.RuTracker;
 
@@ -24,7 +24,7 @@ public class BaseRuTracker : BaseTrackerSearch, ITrackerCatalogEnricher
 
     private readonly IOptions<Config> _config;
     
-    protected BaseRuTracker(IOptions<Config> config, HttpService httpService, ICacheService cacheService) : base(config,
+    protected BaseRuTracker(IOptions<Config> config, TrackerHttpClient httpService, ICacheService cacheService) : base(config,
         httpService, cacheService)
     {
         _config = config;
@@ -36,12 +36,12 @@ public class BaseRuTracker : BaseTrackerSearch, ITrackerCatalogEnricher
 
     private string LoginUrl => Host + "forum/login.php";
 
-    public async Task<bool> FetchDetailsAsync(TorrentDetails torrent)
+    public async Task<bool> FetchDetailsAsync(TorrentDetails torrent, CancellationToken ct)
     {
         if (torrent == null || string.IsNullOrWhiteSpace(torrent.Url))
             return false;
 
-        var details = await FetchTopicDetailsAsync(torrent.Url);
+        var details = await FetchTopicDetailsAsync(torrent.Url, false, ct);
         if (string.IsNullOrWhiteSpace(details.Magnet))
             return false;
 
@@ -54,17 +54,15 @@ public class BaseRuTracker : BaseTrackerSearch, ITrackerCatalogEnricher
         string url,
         string categoryId,
         DateTime now,
-        int timeoutSeconds = 10,
-        int maxResponseSize = 10_000_000,
+        CancellationToken ct,
         bool useProxy = false)
     {
         var html = await Get(
             url,
             RuEncoding,
             url,
-            timeoutSeconds,
-            maxResponseSize,
-            useProxy: useProxy);
+            useProxy,
+            ct);
 
         if (string.IsNullOrWhiteSpace(html))
             return [];
@@ -76,46 +74,36 @@ public class BaseRuTracker : BaseTrackerSearch, ITrackerCatalogEnricher
         string url,
         Encoding? encoding = null,
         string? referer = null,
-        int timeoutSeconds = 15,
-        int maxResponseSize = 10_000_000,
-        List<(string name, string val)>? addHeaders = null,
-        bool useProxy = false)
+        bool useProxy = false,
+        CancellationToken ct = default)
     {
         if (!CacheService.TryGetValue(CookieKey, out string? cookie))
-            cookie = await Authorize();
+            cookie = await Authorize(false, ct);
 
         var html = await HttpService.GetStringAsync(
             url,
-            new RequestOptions
-            {
-                Encoding = encoding ?? Encoding.UTF8,
-                Cookie = cookie,
-                Referer = referer,
-                TimeoutSeconds = timeoutSeconds,
-                MaxResponseSizeBytes = maxResponseSize,
-                Headers = addHeaders?.ToDictionary(x => x.name, x => x.val)
-            });
+            cookie: cookie,
+            referer: referer,
+            encoding: encoding ?? Encoding.UTF8,
+            useProxy: useProxy,
+            ct: ct);
 
         if (string.IsNullOrWhiteSpace(html) || !html.Contains("id=\"logged-in-username\""))
         {
-            cookie = await Authorize(true);
+            cookie = await Authorize(true, ct);
             html = await HttpService.GetStringAsync(
                 url,
-                new RequestOptions
-                {
-                    Encoding = encoding ?? Encoding.UTF8,
-                    Cookie = cookie,
-                    Referer = referer,
-                    TimeoutSeconds = timeoutSeconds,
-                    MaxResponseSizeBytes = maxResponseSize,
-                    Headers = addHeaders?.ToDictionary(x => x.name, x => x.val)
-                });
+                cookie: cookie,
+                referer: referer,
+                encoding: encoding ?? Encoding.UTF8,
+                useProxy: useProxy,
+                ct: ct);
         }
 
         return html;
     }
 
-    private async Task<string> Authorize(bool reAuth = false)
+    private async Task<string> Authorize(bool reAuth = false, CancellationToken ct = default)
     {
         var pairs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -130,14 +118,19 @@ public class BaseRuTracker : BaseTrackerSearch, ITrackerCatalogEnricher
         var response = await HttpService.PostResponseAsync(
             LoginUrl,
             new StringContent(formEncoded, Encoding.Default, "application/x-www-form-urlencoded"),
-            new RequestOptions { AllowAutoRedirect = false });
+            cookie: null,
+            referer: null,
+            encoding: null,
+            useProxy: true,
+            allowRedirect: false,
+            ct: ct);
 
         if (response.StatusCode is not HttpStatusCode.Found)
         {
             if (reAuth)
                 return string.Empty;
 
-            return await Authorize(true);
+            return await Authorize(true, ct);
         }
 
         var cookies = response.Headers.TryGetValues("Set-Cookie", out var v) ? v : [];
@@ -468,7 +461,7 @@ public class BaseRuTracker : BaseTrackerSearch, ITrackerCatalogEnricher
     private async
         Task<(string? Magnet, DateTime CreateTime, string? Title, int Sid, int Pir, long Size, string? SizeName)>
         FetchTopicDetailsAsync(
-            string url, bool force = false)
+            string url, bool force = false, CancellationToken ct = default)
     {
         try
         {
@@ -476,7 +469,8 @@ public class BaseRuTracker : BaseTrackerSearch, ITrackerCatalogEnricher
                 url,
                 RuEncoding,
                 url,
-                7);
+                false,
+                ct);
 
             if (string.IsNullOrWhiteSpace(html))
                 return (null, default, null, 0, 0, 0, null);

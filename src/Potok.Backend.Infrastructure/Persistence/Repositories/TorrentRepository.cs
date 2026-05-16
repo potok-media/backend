@@ -46,11 +46,13 @@ public class TorrentRepository : ITorrentRepository
         }
     }
 
-    public async Task AddOrUpdateAsync<T>(IReadOnlyCollection<T> torrents, Func<T, Task<bool>> predicate) where T : TorrentDetails
+    public async Task AddOrUpdateAsync<T>(IReadOnlyCollection<T> torrents, Func<T, CancellationToken, Task<bool>> predicate, CancellationToken ct) where T : TorrentDetails
     {
         foreach (var torrent in torrents)
         {
-            if (predicate != null && !await predicate(torrent))
+            if (ct.IsCancellationRequested) break;
+            
+            if (predicate != null && !await predicate(torrent, ct))
                 continue;
 
             await AddOrUpdateAsync([torrent]);
