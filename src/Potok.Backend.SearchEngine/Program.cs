@@ -81,7 +81,7 @@ CultureInfo.CurrentCulture = new CultureInfo("ru-RU");
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 // --- Регистрация зависимостей ---
-builder.Services.AddSharedInfrastructure();
+builder.Services.AddSharedInfrastructure(builder.Configuration);
 builder.Services.AddSearchEngineInfrastructure(builder.Configuration);
 
 var app = builder.Build();

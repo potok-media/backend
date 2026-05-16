@@ -11,11 +11,12 @@ using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Options;
 using Potok.Backend.Core.Utils;
+using Potok.Backend.Infrastructure.BackgroundHosting;
 using Potok.Backend.Infrastructure.BackgroundHosting.Media;
 using Potok.Backend.Infrastructure.BackgroundHosting.Refresh;
 using Potok.Backend.Infrastructure.BackgroundHosting.RuTracker;
-using Potok.Backend.Infrastructure.Gateway.Middlewares;
 using Potok.Backend.Infrastructure.Gateway.Services;
+using Potok.Backend.Infrastructure.Middlewares;
 using Potok.Backend.Infrastructure.Persistence.Repositories;
 using Potok.Backend.Infrastructure.SearchEngine.Migrations.Configurations;
 using Potok.Backend.Infrastructure.SearchEngine.Services;
@@ -33,24 +34,16 @@ namespace Potok.Backend.Infrastructure.Configuration;
 
 public static class ServicesConfiguration
 {
-    public static IServiceCollection AddSharedInfrastructure(this IServiceCollection services)
+    public static IServiceCollection AddSharedInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddSingleton<Serilog.ILogger>(Log.Logger);
         
         services
-            .AddScoped<ITorrentRepository>(sp => new TorrentRepository(
-                sp.GetRequiredService<ITorrentEnricher>(),
-                sp.GetRequiredService<ILogger<TorrentRepository>>(),
-                sp.GetService<string>() ?? ""))
-            .AddScoped<IQueriesRepository>(sp => new QueriesRepository(sp.GetService<string>() ?? ""))
-            .AddScoped<ISubscriptionRepository>(sp => new SubscriptionRepository(sp.GetService<string>() ?? ""))
+            .AddScoped<ITorrentRepository, TorrentRepository>()
+            .AddScoped<IQueriesRepository, QueriesRepository>()
+            .AddScoped<ISubscriptionRepository, SubscriptionRepository>()
             .AddScoped<ITorrentEnricher, TorrentEnricher>()
-            .AddScoped<ILocalSearchService>(sp => new LocalSearchService(
-                sp.GetRequiredService<IOptions<Config>>(),
-                sp.GetRequiredService<HttpService>(),
-                sp.GetRequiredService<ICacheService>(),
-                sp.GetService<string>() ?? "",
-                sp.GetRequiredService<ILogger<LocalSearchService>>()))
+            .AddScoped<ILocalSearchService, LocalSearchService>()
             .AddScoped<ITorrentMediaProbeService, TorrentMediaProbeService>()
             .AddScoped<IRemoteSearchService, RemoteSearchService>()
             .AddScoped<ISearchService, SearchService>()
@@ -68,6 +61,7 @@ public static class ServicesConfiguration
             .AddScoped<IHomeService, HomeService>()
             .AddScoped<IMediaOrchestrator, MediaOrchestrator>()
             .AddScoped<ILibraryOrchestrator, LibraryOrchestrator>()
+            .AddScoped<IInfuseRepository, InfuseRepository>()
             .AddSingleton<ISettingsRepository, SettingsRepository>()
             .AddTransient<TraktApiHandler>();
 
@@ -166,6 +160,12 @@ public static class ServicesConfiguration
         services.AddHttpClient<TraktClient>().AddHttpMessageHandler<TraktApiHandler>().AddStandardResilienceHandler();
         services.AddHttpClient("TraktProxy").AddHttpMessageHandler<TraktApiHandler>().AddStandardResilienceHandler();
 
+        var connectionString = configuration.GetConnectionString("DefaultConnection")
+                               ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+
+        services.AddSingleton(connectionString);
+        services.AddSearchEngineMigrations(connectionString);
+        
         return services;
     }
 
@@ -222,14 +222,9 @@ public static class ServicesConfiguration
         });
 
         services.AddRouting(options => options.LowercaseUrls = true);
-
-        var connectionString = configuration.GetConnectionString("DefaultConnection")
-                               ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
-
-        services.AddSingleton(connectionString);
-        services.AddSearchEngineMigrations(connectionString);
         
         // крон сервисы
+        services.AddHostedService<InfuseHealthCheckService>();
         services.AddHostedService<TorrentMediaProbeHostedService>();
         services.AddHostedService<RuTrackerPopularHostedService>();
         services.AddHostedService<RefreshHostedService>();

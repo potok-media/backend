@@ -15,7 +15,7 @@ public class MediaOrchestrator : IMediaOrchestrator
         _traktClient = traktClient;
     }
 
-    public async Task<MediaCard> GetMediaDetailAsync(string mediaType, string id, string? accessToken, string baseUrl)
+    public async Task<MediaCard> GetMediaDetailAsync(string mediaType, long id, string? accessToken, string baseUrl)
     {
         var tmdbPath = $"{mediaType}/{id}?append_to_response=content_ratings,release_dates,external_ids,images,translations,credits&include_image_language=ru,en,null";
         
@@ -157,10 +157,53 @@ public class MediaOrchestrator : IMediaOrchestrator
             ?? Enumerable.Empty<MediaCard>();
     }
 
-    public async Task<MediaSeason?> GetSeasonAsync(string tvId, int seasonNumber, string baseUrl)
+    public async Task<MediaSeason?> GetSeasonAsync(long tvId, int seasonNumber, string baseUrl)
     {
         var path = $"tv/{tvId}/season/{seasonNumber}?append_to_response=credits";
         var season = await _tmdbClient.GetAsync<TmdbSeason>(path);
         return season != null ? MediaMapper.MapToMediaSeason(season, baseUrl) : null;
+    }
+
+    private static readonly Dictionary<string, (string Path, string MediaType)> RowDefinitions = new()
+    {
+        ["movie.now-playing"] = ("movie/now_playing", "movie"),
+        ["movie.trending-day"] = ("trending/movie/day", "movie"),
+        ["movie.trending-week"] = ("trending/movie/week", "movie"),
+        ["movie.upcoming"] = ("movie/upcoming", "movie"),
+        ["movie.popular"] = ("movie/popular", "movie"),
+        ["tv.popular"] = ("trending/tv/week", "tv"),
+        ["movie.top-rated"] = ("movie/top_rated", "movie"),
+        ["tv.top-rated"] = ("tv/top_rated", "tv")
+    };
+
+    public async Task<IEnumerable<MediaCard>> GetMediaRowAsync(string rowId, int page, string baseUrl)
+    {
+        string? tmdbPath = null;
+        string? mediaType = null;
+
+        if (RowDefinitions.TryGetValue(rowId, out var def))
+        {
+            tmdbPath = def.Path;
+            mediaType = def.MediaType;
+        }
+        else if (rowId.StartsWith("genre.", StringComparison.OrdinalIgnoreCase))
+        {
+            // Format: genre.movie.28 or genre.tv.16
+            var parts = rowId.Split('.');
+            if (parts.Length == 3)
+            {
+                mediaType = parts[1];
+                var genreId = parts[2];
+                tmdbPath = $"discover/{mediaType}?with_genres={genreId}";
+            }
+        }
+
+        if (tmdbPath == null) return Enumerable.Empty<MediaCard>();
+
+        var response = await _tmdbClient.GetAsync<TmdbPagedResponse<TmdbMultiSearchResult>>(tmdbPath, page: page);
+        
+        return response?.Results?
+            .Select(item => MediaMapper.MapToMediaCard(item with { MediaType = mediaType ?? item.MediaType }, baseUrl)) 
+            ?? Enumerable.Empty<MediaCard>();
     }
 }

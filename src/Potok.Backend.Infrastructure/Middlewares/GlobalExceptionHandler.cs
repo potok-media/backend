@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
-namespace Potok.Backend.Infrastructure.Gateway.Middlewares;
+namespace Potok.Backend.Infrastructure.Middlewares;
 
 public class GlobalExceptionHandler : IExceptionHandler
 {

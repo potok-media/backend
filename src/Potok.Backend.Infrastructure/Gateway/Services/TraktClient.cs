@@ -16,7 +16,7 @@ public class TraktClient
         _httpClient.BaseAddress = new Uri(TraktApiBase);
     }
 
-    public async Task<TraktWatchProgress?> GetWatchedProgressAsync(string mediaType, string tmdbId, string accessToken)
+    public async Task<TraktWatchProgress?> GetWatchedProgressAsync(string mediaType, long tmdbId, string accessToken)
     {
         try
         {
@@ -125,7 +125,7 @@ public class TraktClient
         }
     }
 
-    public async Task<TraktMetadata?> GetMediaMetadataAsync(string mediaType, string tmdbId, string accessToken)
+    public async Task<TraktMetadata?> GetMediaMetadataAsync(string mediaType, long tmdbId, string accessToken)
     {
         try
         {
@@ -134,20 +134,20 @@ public class TraktClient
             // But for simplicity and accuracy per-item:
             var watchlist = await GetWatchlistAsync(accessToken);
             var favorites = await GetFavoritesAsync(accessToken);
-            
+
             bool inWatchlist = watchlist?.Any(i => 
-                (mediaType == "movie" && i.Movie?.Ids?.Tmdb == int.Parse(tmdbId)) || 
-                (mediaType == "tv" && i.Show?.Ids?.Tmdb == int.Parse(tmdbId))
+                (mediaType == "movie" && i.Movie?.Ids?.Tmdb == tmdbId) || 
+                (mediaType == "tv" && i.Show?.Ids?.Tmdb == tmdbId)
             ) ?? false;
 
             bool inFavorites = favorites?.Any(i => 
-                (mediaType == "movie" && i.Movie?.Ids?.Tmdb == int.Parse(tmdbId)) || 
-                (mediaType == "tv" && i.Show?.Ids?.Tmdb == int.Parse(tmdbId))
+                (mediaType == "movie" && i.Movie?.Ids?.Tmdb == tmdbId) || 
+                (mediaType == "tv" && i.Show?.Ids?.Tmdb == tmdbId)
             ) ?? false;
 
             return new TraktMetadata(inWatchlist, inFavorites);
         }
-        catch
+        catch (Exception ex)
         {
             return new TraktMetadata(false, false);
         }

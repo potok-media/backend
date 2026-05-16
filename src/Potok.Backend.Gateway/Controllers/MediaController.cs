@@ -38,7 +38,7 @@ public class MediaController : ControllerBase
     [HttpGet("detail/{mediaType}/{id}")]
     public async Task<IActionResult> GetDetail(
         string mediaType, 
-        string id,
+        long id,
         [FromQuery] bool refresh = false)
     {
         var accessToken = await _settings.GetValueAsync("trakt_access_token");
@@ -72,9 +72,16 @@ public class MediaController : ControllerBase
     }
 
     [HttpGet("tmdb/tv/{tvId}/season/{seasonNumber}")]
-    public async Task<IActionResult> GetSeason(string tvId, int seasonNumber)
+    public async Task<IActionResult> GetSeason(long tvId, int seasonNumber)
     {
         var result = await _orchestrator.GetSeasonAsync(tvId, seasonNumber, BaseUrl);
         return result != null ? Ok(result) : NotFound();
+    }
+
+    [HttpGet("row/{id}")]
+    public async Task<IActionResult> GetRow(string id, [FromQuery] int page = 1)
+    {
+        var results = await _orchestrator.GetMediaRowAsync(id, page, BaseUrl);
+        return Ok(results ?? Enumerable.Empty<MediaCard>());
     }
 }

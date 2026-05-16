@@ -194,10 +194,11 @@ public class TorrServerClient : ITorrServerClient
         ).ToList();
     }
 
-    private string GenerateStreamUrl(string baseUrl, string hash, string index, string? mediaType, int? season, int? episode, string? englishTitle, string? originalTitle, string? title, string? tmdbId)
+    private string GenerateStreamUrl(string baseUrl, string hash, string index, string? mediaType, int? season, int? episode, string? englishTitle, string? originalTitle, string? title, long? tmdbId)
     {
-        var rawTitle = englishTitle ?? originalTitle ?? title ?? "{tmdb-" + tmdbId + "}";
-        var tmdbTag = "{tmdb-" + tmdbId + "}";
+        var tmdbTag = tmdbId.HasValue ? "{tmdb-" + tmdbId.Value + "}" : "";
+        var rawTitle = englishTitle ?? originalTitle ?? title ?? tmdbTag;
+        
         var cleanTitle = Regex.Replace(rawTitle, @"[^a-zA-Z0-9\s]", "");
         cleanTitle = Regex.Replace(cleanTitle, @"\s+", ".");
         cleanTitle = cleanTitle.Trim('.');
@@ -207,7 +208,13 @@ public class TorrServerClient : ITorrServerClient
         {
             fileName += $".S{(season ?? 1):D2}E{(episode ?? 1):D2}";
         }
-        fileName += $".{tmdbTag}.mkv";
+        
+        if (!string.IsNullOrEmpty(tmdbTag))
+        {
+            fileName += $".{tmdbTag}";
+        }
+        
+        fileName += ".mkv";
         fileName = fileName.Trim('.');
 
         return $"{baseUrl}/stream/{fileName}?link={hash.ToLower()}&index={index}&play";

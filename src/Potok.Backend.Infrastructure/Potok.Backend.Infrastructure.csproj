@@ -9,6 +9,7 @@
     <ItemGroup>
       <FrameworkReference Include="Microsoft.AspNetCore.App" />
       <Folder Include="Gateway\" />
+      <Folder Include="Gateway\Middlewares\" />
       <Folder Include="SearchEngine\" />
     </ItemGroup>
 

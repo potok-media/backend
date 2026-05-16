@@ -20,7 +20,7 @@ public class TorrentsController : ControllerBase
     {
         var internalRequest = new Potok.Backend.Core.Models.Api.TorrentSearchRequest
         {
-            TmdbId = long.TryParse(request.Id, out var id) ? id : null,
+            TmdbId = request.Id,
             Query = request.Query,
             Title = request.Title ?? request.Query,
             TitleOriginal = request.OriginalTitle ?? "",

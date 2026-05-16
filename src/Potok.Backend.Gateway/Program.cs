@@ -4,7 +4,7 @@ using Potok.Backend.Infrastructure.Configuration;
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
-builder.Services.AddSharedInfrastructure();
+builder.Services.AddSharedInfrastructure(builder.Configuration);
 builder.Services.AddGatewayInfrastructure(builder.Configuration);
 
 var app = builder.Build();
@@ -39,6 +39,9 @@ using (var scope = app.Services.CreateScope())
 {
     var settingsRepo = scope.ServiceProvider.GetRequiredService<ISettingsRepository>();
     await settingsRepo.EnsureDatabaseAsync();
+    
+    var infuseRepo = scope.ServiceProvider.GetRequiredService<IInfuseRepository>();
+    await infuseRepo.EnsureDatabaseAsync();
     
     var torrentRepo = scope.ServiceProvider.GetRequiredService<ITorrentRepository>();
     await torrentRepo.EnsureDatabaseAsync();

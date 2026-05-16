@@ -1,38 +1,42 @@
 using Dapper;
-using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Options;
+using Npgsql;
 using Potok.Backend.Core.Interfaces;
-using Potok.Backend.Infrastructure.Configuration;
+using Potok.Backend.Infrastructure.SearchEngine.Migrations.Configurations;
 
 namespace Potok.Backend.Infrastructure.Persistence.Repositories;
 
 public class SettingsRepository : ISettingsRepository
 {
+    private const string Schema = DbSchema.Name;
     private readonly string _connectionString;
 
-    public SettingsRepository(IOptions<GatewayOptions> options)
+    public SettingsRepository(string connectionString)
     {
-        _connectionString = options.Value.SettingsDbConnection;
+        _connectionString = connectionString;
     }
 
     public async Task EnsureDatabaseAsync()
     {
-        using var connection = new SqliteConnection(_connectionString);
-        var sql = "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)";
-        await connection.ExecuteAsync(sql);
+        // Migrations handle database creation
+        await Task.CompletedTask;
     }
 
     public async Task<string?> GetValueAsync(string key)
     {
-        using var connection = new SqliteConnection(_connectionString);
-        var sql = "SELECT value FROM settings WHERE key = @Key";
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        var sql = $"SELECT value FROM {Schema}.settings WHERE key = @Key";
         return await connection.QuerySingleOrDefaultAsync<string>(sql, new { Key = key });
     }
 
     public async Task SetValueAsync(string key, string value)
     {
-        using var connection = new SqliteConnection(_connectionString);
-        var sql = "INSERT OR REPLACE INTO settings (key, value) VALUES (@Key, @Value)";
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        var sql = $@"
+            INSERT INTO {Schema}.settings (key, value) 
+            VALUES (@Key, @Value)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value";
         await connection.ExecuteAsync(sql, new { Key = key, Value = value });
     }
 }

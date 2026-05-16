@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 namespace Potok.Backend.Core.Models;
 
 public record TmdbMovie(
-    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("id")] long Id,
     [property: JsonPropertyName("title")] string? Title,
     [property: JsonPropertyName("original_title")] string? OriginalTitle,
     [property: JsonPropertyName("release_date")] string? ReleaseDate,
@@ -20,7 +20,7 @@ public record TmdbMovie(
 );
 
 public record TmdbTvShow(
-    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("id")] long Id,
     [property: JsonPropertyName("name")] string? Name,
     [property: JsonPropertyName("original_name")] string? OriginalName,
     [property: JsonPropertyName("first_air_date")] string? FirstAirDate,
@@ -40,7 +40,7 @@ public record TmdbTvShow(
 );
 
 public record TmdbSeason(
-    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("id")] long Id,
     [property: JsonPropertyName("name")] string? Name,
     [property: JsonPropertyName("overview")] string? Overview,
     [property: JsonPropertyName("season_number")] int SeasonNumber,
@@ -50,7 +50,7 @@ public record TmdbSeason(
 );
 
 public record TmdbEpisode(
-    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("id")] long Id,
     [property: JsonPropertyName("name")] string? Name,
     [property: JsonPropertyName("overview")] string? Overview,
     [property: JsonPropertyName("episode_number")] int EpisodeNumber,
@@ -68,7 +68,7 @@ public record TmdbCredits(
 );
 
 public record TmdbCast(
-    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("id")] long Id,
     [property: JsonPropertyName("name")] string? Name,
     [property: JsonPropertyName("character")] string? Character,
     [property: JsonPropertyName("profile_path")] string? ProfilePath,
@@ -76,7 +76,7 @@ public record TmdbCast(
 );
 
 public record TmdbCrew(
-    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("id")] long Id,
     [property: JsonPropertyName("name")] string? Name,
     [property: JsonPropertyName("job")] string? Job,
     [property: JsonPropertyName("department")] string? Department,
@@ -88,12 +88,12 @@ public record TmdbImageContainer(
 );
 
 public record TmdbGenre(
-    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("id")] long Id,
     [property: JsonPropertyName("name")] string? Name
 );
 
 public record TmdbProductionCompany(
-    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("id")] long Id,
     [property: JsonPropertyName("logo_path")] string? LogoPath,
     [property: JsonPropertyName("name")] string? Name,
     [property: JsonPropertyName("origin_country")] string? OriginCountry
@@ -121,8 +121,8 @@ public record TmdbTranslationData(
 );
 
 public record TmdbMultiSearchResult(
-    [property: JsonPropertyName("id")] int Id,
-    [property: JsonPropertyName("media_type")] string MediaType,
+    [property: JsonPropertyName("id")] long Id,
+    [property: JsonPropertyName("media_type")] string? MediaType,
     [property: JsonPropertyName("title")] string? Title,
     [property: JsonPropertyName("name")] string? Name,
     [property: JsonPropertyName("poster_path")] string? PosterPath,

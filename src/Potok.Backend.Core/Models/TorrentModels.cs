@@ -5,7 +5,7 @@ public record TorrentSearchRequest(
     string MediaType,
     string? EnglishTitle = null,
     IEnumerable<string>? Genres = null,
-    string? Id = null,
+    long? Id = null,
     string? OriginalTitle = null,
     string? Title = null,
     string? Year = null
@@ -57,7 +57,7 @@ public record TorrentFilesRequest(
     int? NumberOfSeasons = null,
     string? OriginalTitle = null,
     string? Poster = null,
-    string? TmdbId = null
+    long? TmdbId = null
 );
 
 public record TorrentStreamRequest(
@@ -71,7 +71,7 @@ public record TorrentStreamRequest(
     string? OriginalTitle = null,
     int? Season = null,
     string? Title = null,
-    string? TmdbId = null
+    long? TmdbId = null
 );
 
 public record TorrentStreamResponse(string? StreamUrl);

@@ -11,7 +11,7 @@ public static class MediaMapper
         string backdropSize = "original", 
         string logoSize = "original")
     {
-        var id = movie.Id.ToString();
+        var id = movie.Id;
         var title = movie.Title ?? "Unknown";
         var originalTitle = movie.OriginalTitle;
         
@@ -92,7 +92,7 @@ public static class MediaMapper
         string backdropSize = "original", 
         string logoSize = "original")
     {
-        var id = tvShow.Id.ToString();
+        var id = tvShow.Id;
         var title = tvShow.Name ?? "Unknown";
         var originalTitle = tvShow.OriginalName;
         
@@ -203,7 +203,7 @@ public static class MediaMapper
         string posterSize = "w780", 
         string backdropSize = "original")
     {
-        var id = result.Id.ToString();
+        var id = result.Id;
         var title = result.Title ?? result.Name ?? "Unknown";
         
         var releaseDate = result.ReleaseDate ?? result.FirstAirDate ?? "";

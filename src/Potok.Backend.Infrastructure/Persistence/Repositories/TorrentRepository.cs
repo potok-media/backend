@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Dapper;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using MonoTorrent;
 using Npgsql;
@@ -23,7 +22,8 @@ public class TorrentRepository : ITorrentRepository
     public TorrentRepository(
         ITorrentEnricher torrentEnricher,
         ILogger<TorrentRepository> logger,
-        string connectionString)
+        string connectionString
+        )
     {
         _torrentEnricher = torrentEnricher;
         _logger = logger;
@@ -123,22 +123,28 @@ public class TorrentRepository : ITorrentRepository
     
     public async Task EnsureDatabaseAsync()
     {
-        using var connection = new SqliteConnection(_connectionString);
-        var sql = "CREATE TABLE IF NOT EXISTS torrent_overrides (hash TEXT PRIMARY KEY, season INTEGER, episode_offset INTEGER)";
-        await connection.ExecuteAsync(sql);
+        // Migrations handle database creation
+        await Task.CompletedTask;
     }
 
     public async Task<TorrentOverride?> GetOverrideAsync(string hash)
     {
-        using var connection = new SqliteConnection(_connectionString);
-        var sql = "SELECT hash, season, episode_offset as EpisodeOffset FROM torrent_overrides WHERE hash = @Hash";
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        var sql = $@"SELECT hash, season, episode_offset as EpisodeOffset FROM {Schema}.torrent_overrides WHERE hash = @Hash";
         return await connection.QuerySingleOrDefaultAsync<TorrentOverride>(sql, new { Hash = hash });
     }
 
     public async Task SetOverrideAsync(string hash, int? season, int? episodeOffset)
     {
-        using var connection = new SqliteConnection(_connectionString);
-        var sql = "INSERT OR REPLACE INTO torrent_overrides (hash, season, episode_offset) VALUES (@Hash, @Season, @Offset)";
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        var sql = $@"
+            INSERT INTO {Schema}.torrent_overrides (hash, season, episode_offset) 
+            VALUES (@Hash, @Season, @Offset)
+            ON CONFLICT (hash) DO UPDATE SET 
+                season = EXCLUDED.season, 
+                episode_offset = EXCLUDED.episode_offset";
         await connection.ExecuteAsync(sql, new { Hash = hash, Season = season, Offset = episodeOffset });
     }
 }
