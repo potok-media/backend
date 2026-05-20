@@ -8,7 +8,8 @@ public record TorrentSearchRequest(
     long? Id = null,
     string? OriginalTitle = null,
     string? Title = null,
-    string? Year = null
+    string? Year = null,
+    bool? ForceSearch = null
 );
 
 public record TorrentTag(string Kind, string Value);

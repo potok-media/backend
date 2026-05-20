@@ -25,7 +25,8 @@ public class TorrentsController : ControllerBase
             Title = request.Title ?? request.Query,
             TitleOriginal = request.OriginalTitle ?? "",
             Year = int.TryParse(request.Year, out var y) ? y : 0,
-            IsSerial = request.MediaType == "tv" ? 2 : 1
+            IsSerial = request.MediaType == "tv" ? 2 : 1,
+            ForceSearch = request.ForceSearch ?? false
         };
 
         var results = await _searchService.SearchTorrentsAsync(internalRequest);

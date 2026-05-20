@@ -46,6 +46,13 @@ public class SearchService : BaseSearchService, ISearchService
             request.Type ?? "null", 
             request.Year.ToString());
 
+        if (request.ForceSearch)
+        {
+            var torrents = await ExecuteUnifiedSearch(request);
+            await CacheService.SetAsync(cacheKey, torrents, TimeSpan.FromMinutes(_config.Cache.Expiry));
+            return torrents;
+        }
+
         return await CacheService.GetOrCreateAsync(cacheKey, async () =>
         {
             var torrents = await ExecuteUnifiedSearch(request);
