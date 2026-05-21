@@ -17,4 +17,12 @@ public static class PeerProtocol {
         handshake.PeerId.Span.CopyTo(span.Slice(48));
         writer.Advance(HandshakeLength);
     }
+
+    public static Handshake ReadHandshake(ReadOnlySpan<byte> data) {
+        if (data.Length < HandshakeLength) throw new ArgumentException("Data too short for handshake");
+        if (data[0] != 19 || !data.Slice(1, 19).SequenceEqual("BitTorrent protocol"u8))
+            throw new FormatException("Invalid handshake protocol");
+            
+        return new Handshake(data.Slice(28, 20).ToArray(), data.Slice(48, 20).ToArray());
+    }
 }
