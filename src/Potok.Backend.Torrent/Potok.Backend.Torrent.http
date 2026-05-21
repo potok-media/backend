@@ -1,0 +1,6 @@
+@Potok.Backend.Torrent_HostAddress = http://localhost:5040
+
+GET {{Potok.Backend.Torrent_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
