@@ -399,3 +399,4 @@ FodyWeavers.xsd
 *.sln.iml
 src/Potok.Backend.Gateway/settings.sqlite
 src/Potok.Backend.SearchEngine/config.local.yml
+.worktrees/
