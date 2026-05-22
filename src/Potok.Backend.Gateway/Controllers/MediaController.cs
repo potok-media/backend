@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models;
 using Potok.Backend.Infrastructure.Gateway.Services;
+using ILogger = Serilog.ILogger;
 
 namespace Potok.Backend.Gateway.Controllers;
 
@@ -13,13 +14,15 @@ public class MediaController : ControllerBase
     private readonly IMediaOrchestrator _orchestrator;
     private readonly TmdbClient _tmdbClient;
     private readonly ISettingsRepository _settings;
+    private readonly ILogger _logger;
 
-    public MediaController(IHomeService homeService, IMediaOrchestrator orchestrator, TmdbClient tmdbClient, ISettingsRepository settings)
+    public MediaController(IHomeService homeService, IMediaOrchestrator orchestrator, TmdbClient tmdbClient, ISettingsRepository settings, ILogger logger)
     {
         _homeService = homeService;
         _orchestrator = orchestrator;
         _tmdbClient = tmdbClient;
         _settings = settings;
+        _logger = logger;
     }
 
     private string BaseUrl => $"{Request.Scheme}://{Request.Host}";
@@ -43,7 +46,7 @@ public class MediaController : ControllerBase
     {
         var accessToken = await _settings.GetValueAsync("trakt_access_token");
 
-        Console.WriteLine($"[MediaController] GetDetail: {mediaType}/{id}, refresh={refresh}, hasToken={!string.IsNullOrEmpty(accessToken)}");
+        _logger.Debug("Fetching media details for {MediaType}/{Id} (refresh={Refresh}, hasToken={HasToken})", mediaType, id, refresh, !string.IsNullOrEmpty(accessToken));
 
         var result = await _orchestrator.GetMediaDetailAsync(mediaType, id, accessToken, BaseUrl);
 

@@ -35,13 +35,8 @@ public class MediaOrchestrator : IMediaOrchestrator
 
         if (!string.IsNullOrEmpty(accessToken))
         {
-            Console.WriteLine($"[MediaOrchestrator] Access token present, requesting Trakt progress/metadata for {mediaType} {id}");
             progressTask = _traktClient.GetWatchedProgressAsync(mediaType, id, accessToken);
             metadataTask = _traktClient.GetMediaMetadataAsync(mediaType, id, accessToken);
-        }
-        else
-        {
-            Console.WriteLine($"[MediaOrchestrator] No access token, skipping Trakt data for {mediaType} {id}");
         }
 
         await Task.WhenAll(movieTask, tvTask, progressTask, metadataTask);

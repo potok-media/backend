@@ -2,17 +2,20 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using Potok.Backend.Core.Models;
+using ILogger = Serilog.ILogger;
 
 namespace Potok.Backend.Infrastructure.Gateway.Services;
 
 public class TraktClient
 {
     private readonly HttpClient _httpClient;
+    private readonly ILogger _logger;
     private const string TraktApiBase = "https://api.trakt.tv";
 
-    public TraktClient(HttpClient httpClient)
+    public TraktClient(HttpClient httpClient, ILogger logger)
     {
         _httpClient = httpClient;
+        _logger = logger;
         _httpClient.BaseAddress = new Uri(TraktApiBase);
     }
 
@@ -20,7 +23,7 @@ public class TraktClient
     {
         try
         {
-            Console.WriteLine($"[TraktClient] Fetching watched progress for {mediaType} TMDB ID: {tmdbId}");
+            _logger.Debug("Fetching watched progress for {MediaType} TMDB ID: {TmdbId}", mediaType, tmdbId);
             
             // 1. Find Trakt ID by TMDB ID
             var searchUrl = $"search/tmdb/{tmdbId}?type={mediaType}";
@@ -47,7 +50,7 @@ public class TraktClient
                 var traktShow = traktResult?.Show;
                 if (traktShow?.Ids?.Slug == null || traktShow?.Ids?.Trakt == null) 
                 {
-                    Console.WriteLine($"[TraktClient] Could not find Trakt show for TMDB ID: {tmdbId}");
+                    _logger.Warning("Could not find Trakt show for TMDB ID: {TmdbId}", tmdbId);
                     return null;
                 }
 
@@ -120,7 +123,7 @@ public class TraktClient
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TraktClient] Error fetching watched progress: {ex.Message}");
+            _logger.Error(ex, "Error fetching watched progress for {MediaType} TMDB ID: {TmdbId}", mediaType, tmdbId);
             return null;
         }
     }
@@ -210,7 +213,7 @@ public class TraktClient
             if (!response.IsSuccessStatusCode)
             {
                 var errorBody = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"[TraktClient] Failed request to {path}: {response.StatusCode}. Body: {errorBody}");
+                _logger.Error("Failed Trakt request to {Path}: {StatusCode}. Body: {ErrorBody}", path, response.StatusCode, errorBody);
                 return default;
             }
 
@@ -218,7 +221,7 @@ public class TraktClient
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TraktClient] Error in SendRequestAsync for {path}: {ex.Message}");
+            _logger.Error(ex, "Error in Trakt SendRequestAsync for {Path}", path);
             return default;
         }
     }

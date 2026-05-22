@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models;
+using ILogger = Serilog.ILogger;
 
 namespace Potok.Backend.Gateway.Controllers;
 
@@ -10,11 +11,13 @@ public class LibraryController : ControllerBase
 {
     private readonly ILibraryOrchestrator _orchestrator;
     private readonly ISettingsRepository _settings;
+    private readonly ILogger _logger;
 
-    public LibraryController(ILibraryOrchestrator orchestrator, ISettingsRepository settings)
+    public LibraryController(ILibraryOrchestrator orchestrator, ISettingsRepository settings, ILogger logger)
     {
         _orchestrator = orchestrator;
         _settings = settings;
+        _logger = logger;
     }
 
     private string BaseUrl => $"{Request.Scheme}://{Request.Host}";
@@ -39,7 +42,7 @@ public class LibraryController : ControllerBase
         var accessToken = await _settings.GetValueAsync("trakt_access_token");
         if (string.IsNullOrEmpty(accessToken))
         {
-            Console.WriteLine("[LibraryController] Trakt access token not found in settings");
+            _logger.Warning("Trakt access token not found in settings when fetching library items");
             return Unauthorized("Trakt not connected");
         }
 

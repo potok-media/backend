@@ -36,8 +36,6 @@ public static class ServicesConfiguration
 {
     public static IServiceCollection AddSharedInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        services.AddSingleton<Serilog.ILogger>(Log.Logger);
-        
         services
             .AddScoped<ITorrentRepository, TorrentRepository>()
             .AddScoped<IQueriesRepository, QueriesRepository>()
@@ -155,7 +153,12 @@ public static class ServicesConfiguration
             });
         
         services.AddHttpClient<ISearchEngineClient, SearchEngineClient>().AddStandardResilienceHandler();
-        services.AddHttpClient<ITorrServerClient, TorrServerClient>().AddStandardResilienceHandler();
+        services.AddHttpClient<ITorrServerClient, TorrServerClient>().AddStandardResilienceHandler(options =>
+        {
+            options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(60);
+            options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(60);
+            options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(120);
+        });
         services.AddHttpClient<TmdbClient>(client => { client.BaseAddress = new Uri("https://api.themoviedb.org/3/"); }).AddStandardResilienceHandler();
         services.AddHttpClient<TraktClient>().AddHttpMessageHandler<TraktApiHandler>().AddStandardResilienceHandler();
         services.AddHttpClient("TraktProxy").AddHttpMessageHandler<TraktApiHandler>().AddStandardResilienceHandler();

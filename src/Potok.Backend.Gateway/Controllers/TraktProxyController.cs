@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Infrastructure.Configuration;
+using ILogger = Serilog.ILogger;
 
 namespace Potok.Backend.Gateway.Controllers;
 
@@ -12,13 +13,15 @@ public class TraktProxyController : ControllerBase
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly GatewayOptions _options;
     private readonly ISettingsRepository _settingsRepository;
+    private readonly ILogger _logger;
     private const string TraktApiBase = "https://api.trakt.tv";
 
-    public TraktProxyController(IHttpClientFactory httpClientFactory, IOptions<GatewayOptions> options, ISettingsRepository settingsRepository)
+    public TraktProxyController(IHttpClientFactory httpClientFactory, IOptions<GatewayOptions> options, ISettingsRepository settingsRepository, ILogger logger)
     {
         _httpClientFactory = httpClientFactory;
         _options = options.Value;
         _settingsRepository = settingsRepository;
+        _logger = logger;
     }
 
     private HttpClient CreateClient() => _httpClientFactory.CreateClient("TraktProxy");
@@ -62,7 +65,7 @@ public class TraktProxyController : ControllerBase
             var token = tokenProp.GetString();
             if (!string.IsNullOrEmpty(token))
             {
-                Console.WriteLine("[TraktProxyController] Saving access token to settings");
+                _logger.Information("Saving Trakt access token to settings");
                 await _settingsRepository.SetValueAsync("trakt_access_token", token);
             }
         }
@@ -73,7 +76,7 @@ public class TraktProxyController : ControllerBase
     [HttpPost("api/trakt/logout")]
     public async Task<IActionResult> Logout()
     {
-        Console.WriteLine("[TraktProxyController] Clearing Trakt access token from settings");
+        _logger.Information("Clearing Trakt access token from settings");
         await _settingsRepository.SetValueAsync("trakt_access_token", "");
         return Ok(new { success = true });
     }
