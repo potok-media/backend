@@ -1,17 +1,21 @@
 name: Docker Publish
 
 on:
-  push:
-    branches: [ "main", "master" ]
-    # Publish semver tags as releases, e.g., v1.0.0
-    tags: [ 'v*.*.*' ]
-  pull_request:
-    branches: [ "main", "master" ]
   workflow_dispatch:
+    inputs:
+      service:
+        description: 'Выберите сервис для сборки и деплоя (all - собрать все)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - torrentgo
+          - gateway
+          - searchengine
 
 env:
   REGISTRY: ghcr.io
-  # github.repository as <account>/<repo>
   IMAGE_NAME_PREFIX: ${{ github.repository }}
 
 jobs:
@@ -32,7 +36,6 @@ jobs:
 
       # Login to GitHub Container Registry
       - name: Log into registry ${{ env.REGISTRY }}
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -48,17 +51,19 @@ jobs:
 
       # --- Build & Push: TorrentGo ---
       - name: Extract TorrentGo metadata
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'torrentgo'
         id: meta-torrentgo
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-torrentgo
 
       - name: Build and Push TorrentGo
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'torrentgo'
         uses: docker/build-push-action@v6
         with:
           context: ./src/Potok.Backend.TorrentGo
           file: ./src/Potok.Backend.TorrentGo/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta-torrentgo.outputs.tags }}
           labels: ${{ steps.meta-torrentgo.outputs.labels }}
           cache-from: type=gha
@@ -66,17 +71,19 @@ jobs:
 
       # --- Build & Push: Gateway ---
       - name: Extract Gateway metadata
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'gateway'
         id: meta-gateway
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-gateway
 
       - name: Build and Push Gateway
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'gateway'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./src/Potok.Backend.Gateway/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta-gateway.outputs.tags }}
           labels: ${{ steps.meta-gateway.outputs.labels }}
           cache-from: type=gha
@@ -84,17 +91,19 @@ jobs:
 
       # --- Build & Push: SearchEngine ---
       - name: Extract SearchEngine metadata
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'searchengine'
         id: meta-searchengine
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-searchengine
 
       - name: Build and Push SearchEngine
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'searchengine'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./src/Potok.Backend.SearchEngine/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta-searchengine.outputs.tags }}
           labels: ${{ steps.meta-searchengine.outputs.labels }}
           cache-from: type=gha
