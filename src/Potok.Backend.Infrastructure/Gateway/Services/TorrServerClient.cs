@@ -109,7 +109,7 @@ public class TorrServerClient : ITorrServerClient
         var hash = GetHashFromMagnet(request.MagnetUri) ?? request.Hash;
         var baseUrl = config.BaseUrl.TrimEnd('/');
         
-        var streamUrl = $"{baseUrl}/stream/{hash.ToLower()}/{request.Index}";
+        var streamUrl = GenerateStreamUrl(baseUrl, hash, request.Index, request.MediaType, request.Season, request.Episode, request.EnglishTitle, request.OriginalTitle, request.Title, request.TmdbId?.ToString());
 
         return new TorrentStreamResponse(streamUrl);
     }
@@ -126,8 +126,27 @@ public class TorrServerClient : ITorrServerClient
         var hash = filesResponse.Hash ?? "";
         
         return filesResponse.Items.Select(file => 
-            $"{baseUrl}/stream/{hash.ToLower()}/{file.Id}"
+            GenerateStreamUrl(baseUrl, hash, file.Id, request.MediaType, file.Season, file.Episode, request.EnglishTitle, request.OriginalTitle, request.Title, request.TmdbId?.ToString())
         ).ToList();
+    }
+
+    private string GenerateStreamUrl(string baseUrl, string hash, string index, string? mediaType, int? season, int? episode, string? englishTitle, string? originalTitle, string? title, string? tmdbId)
+    {
+        var rawTitle = englishTitle ?? originalTitle ?? title ?? "{tmdb-" + tmdbId + "}";
+        var tmdbTag = "{tmdb-" + tmdbId + "}";
+        var cleanTitle = Regex.Replace(rawTitle, @"[^a-zA-Z0-9\s]", "");
+        cleanTitle = Regex.Replace(cleanTitle, @"\s+", ".");
+        cleanTitle = cleanTitle.Trim('.');
+
+        var fileName = cleanTitle;
+        if (mediaType == "tv")
+        {
+            fileName += $".S{(season ?? 1):D2}E{(episode ?? 1):D2}";
+        }
+        fileName += $".{tmdbTag}.mkv";
+        fileName = fileName.Trim('.');
+
+        return $"{baseUrl}/stream/{hash.ToLower()}/{index}/{fileName}";
     }
 
     private void ConfigureHttpClient(TorrServerConfig config)

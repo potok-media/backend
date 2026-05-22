@@ -36,8 +36,6 @@ var cleanTheme = new AnsiConsoleTheme(new Dictionary<ConsoleThemeStyle, string>
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
-    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
-    .MinimumLevel.Override("System", LogEventLevel.Warning)
     .Enrich.FromLogContext()
     .WriteTo.Console(
         theme: cleanTheme,
@@ -62,6 +60,7 @@ builder.Services.AddGatewayInfrastructure(builder.Configuration);
 var app = builder.Build();
 
 app.UseExceptionHandler();
+app.UseSerilogRequestLogging();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

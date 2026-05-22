@@ -165,7 +165,9 @@ func main() {
 
 	// Streaming route
 	r.Get("/stream/{hash}/{fileIndex}", HandleStream)
+	r.Get("/stream/{hash}/{fileIndex}/{filename}", HandleStream)
 	r.Head("/stream/{hash}/{fileIndex}", HandleStream)
+	r.Head("/stream/{hash}/{fileIndex}/{filename}", HandleStream)
 
 	port := os.Getenv("PORT")
 	if port == "" {

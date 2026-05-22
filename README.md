@@ -47,15 +47,10 @@ docker compose up -d --build
 Ниже представлен готовый конфигурационный файл `docker-compose.yml`, находящийся в корневой директории бэкенда:
 
 ```yaml
-version: '3.8'
-
 services:
   # 🌊 Стриминговый движок BitTorrent (TorrentGo)
   potok-torrentgo:
-    image: ghcr.io/egorrrmiller/potok-torrentgo:latest
-    # build:
-    #   context: ./src/Potok.Backend.TorrentGo
-    #   dockerfile: Dockerfile
+    image: ghcr.io/potok-media/potok-torrentgo:main
     container_name: potok-torrentgo
     restart: unless-stopped
     ports:
@@ -79,10 +74,7 @@ services:
 
   # 🔍 Поисковый движок по трекерам (SearchEngine)
   potok-searchengine:
-    image: ghcr.io/egorrrmiller/potok-searchengine:latest
-    # build:
-    #   context: .
-    #   dockerfile: ./src/Potok.Backend.SearchEngine/Dockerfile
+    image: ghcr.io/potok-media/potok-searchengine:main
     container_name: potok-searchengine
     restart: unless-stopped
     ports:
@@ -92,14 +84,11 @@ services:
       - ConnectionStrings__DefaultConnection=${DATABASE_URL}
     volumes:
       # Монтируем файл конфигурации трекеров для редактирования прямо на хосте без пересборки
-      - ./src/Potok.Backend.SearchEngine/config.local.yml:/app/config.local.yml
+      - ./config.yml:/app/config.local.yml
 
   # 🌐 API-шлюз и BFF (Gateway)
   potok-gateway:
-    image: ghcr.io/egorrrmiller/potok-gateway:latest
-    # build:
-    #   context: .
-    #   dockerfile: ./src/Potok.Backend.Gateway/Dockerfile
+    image: ghcr.io/potok-media/potok-gateway:main
     container_name: potok-gateway
     restart: unless-stopped
     ports:
@@ -108,8 +97,8 @@ services:
       - PORT=${GATEWAY_PORT:-5000}
       - ConnectionStrings__DefaultConnection=${DATABASE_URL}
       - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY}
-      - Gateway__DefaultSearchEngineUrl=${GATEWAY_SEARCH_ENGINE_URL}
-      - Gateway__DefaultTorrServerUrl=${GATEWAY_TORRSERVER_URL}
+      - Gateway__DefaultSearchEngineUrl=${GATEWAY_SEARCH_ENGINE_URL:-http://potok-searchengine:6000}
+      - Gateway__DefaultTorrServerUrl=${GATEWAY_TORRSERVER_URL:-http://potok-torrentgo:5282}
     depends_on:
       - potok-searchengine
       - potok-torrentgo
