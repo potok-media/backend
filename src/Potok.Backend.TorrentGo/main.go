@@ -167,9 +167,14 @@ func main() {
 	r.Get("/stream/{hash}/{fileIndex}", HandleStream)
 	r.Head("/stream/{hash}/{fileIndex}", HandleStream)
 
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "5282"
+	}
+
 	// 5. Start Server
 	server := &http.Server{
-		Addr:    ":5282",
+		Addr:    ":" + port,
 		Handler: r,
 	}
 
@@ -188,7 +193,7 @@ func main() {
 		log.Println("Server stopped.")
 	}()
 
-	log.Println("Server is running on http://localhost:5282")
+	log.Printf("Server is running on http://localhost:%s\n", port)
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("HTTP server failed: %v", err)
 	}

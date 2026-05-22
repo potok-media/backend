@@ -48,8 +48,7 @@ public class TraktProxyController : ControllerBase
         var client = CreateClient();
         var payload = new {
             code = body.GetProperty("code").GetString(),
-            client_id = _options.TraktClientId,
-            client_secret = _options.TraktClientSecret
+            client_id = _options.TraktClientId
         };
         var response = await client.PostAsJsonAsync($"{TraktApiBase}/oauth/device/token", payload);
         

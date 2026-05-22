@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # 🌊 Стриминговый движок BitTorrent (TorrentGo)
+  potok-torrentgo:
+    image: ghcr.io/egorrrmiller/potok-torrentgo:latest
+    container_name: potok-torrentgo
+    restart: unless-stopped
+    ports:
+      - "${TORRENTGO_PORT:-5282}:${TORRENTGO_PORT:-5282}"
+      # ------------------------------------------------------------------------
+      # Входящие BitTorrent подключения (DHT/Peer listen port)
+      # ------------------------------------------------------------------------
+      # - "55123:55123/udp"
+      #
+      # 💡 ПРИМЕЧАНИЕ ДЛЯ ТЕХ, КТО ЗА NAT / TAILSCALE:
+      # Если ваш сервер находится за NAT без проброса портов или подключен через Tailscale,
+      # входящие UDP-подключения из внешней сети BitTorrent не смогут дойти напрямую до контейнера.
+      # В таком случае этот маппинг бесполезен и должен быть ЗАКОММЕНТИРОВАН.
+      # Клиент TorrentGo автоматически перейдет в режим исходящих соединений (outbound-only),
+      # чего абсолютно достаточно для стабильного скачивания и стриминга медиафайлов.
+      # ------------------------------------------------------------------------
+    environment:
+      - PORT=${TORRENTGO_PORT:-5282}
+    volumes:
+      - torrent-cache:/app/torrent-cache
+
+  # 🔍 Поисковый движок по трекерам (SearchEngine)
+  potok-searchengine:
+    image: ghcr.io/egorrrmiller/potok-searchengine:latest
+    container_name: potok-searchengine
+    restart: unless-stopped
+    ports:
+      - "${SEARCH_ENGINE_PORT:-6000}:${SEARCH_ENGINE_PORT:-6000}"
+    environment:
+      - PORT=${SEARCH_ENGINE_PORT:-6000}
+      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+    volumes:
+      # Монтируем файл конфигурации трекеров для редактирования прямо на хосте без пересборки
+      - ./src/Potok.Backend.SearchEngine/config.local.yml:/app/config.local.yml
+
+  # 🌐 API-шлюз и BFF (Gateway)
+  potok-gateway:
+    image: ghcr.io/egorrrmiller/potok-gateway:latest
+    container_name: potok-gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-5000}:${GATEWAY_PORT:-5000}"
+    environment:
+      - PORT=${GATEWAY_PORT:-5000}
+      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+      - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY}
+      - Gateway__DefaultSearchEngineUrl=${GATEWAY_SEARCH_ENGINE_URL}
+      - Gateway__DefaultTorrServerUrl=${GATEWAY_TORRSERVER_URL}
+    depends_on:
+      - potok-searchengine
+      - potok-torrentgo
+
+volumes:
+  torrent-cache:
+    name: potok_torrent_cache

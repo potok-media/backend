@@ -69,6 +69,12 @@ builder.WebHost.UseKestrel((context, kestrelOptions) =>
     var listenIp = serverOpts.ListenIp;
     var port = serverOpts.ListenPort;
 
+    var envPort = Environment.GetEnvironmentVariable("PORT");
+    if (!string.IsNullOrEmpty(envPort) && int.TryParse(envPort, out var parsedPort))
+    {
+        port = parsedPort;
+    }
+
     var ip = listenIp.Equals("any", StringComparison.OrdinalIgnoreCase)
         ? IPAddress.Any
         : IPAddress.Parse(listenIp);

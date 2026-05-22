@@ -1,0 +1,101 @@
+name: Docker Publish
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    # Publish semver tags as releases, e.g., v1.0.0
+    tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  # github.repository as <account>/<repo>
+  IMAGE_NAME_PREFIX: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Set up Buildx runner
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Login to GitHub Container Registry
+      - name: Log into registry ${{ env.REGISTRY }}
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Format repository names to lowercase to satisfy Docker naming rules
+      - name: Get lowercased owner and repo names
+        id: prep
+        run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "owner_lc=${OWNER_LC}" >> $GITHUB_OUTPUT
+
+      # --- Build & Push: TorrentGo ---
+      - name: Extract TorrentGo metadata
+        id: meta-torrentgo
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-torrentgo
+
+      - name: Build and Push TorrentGo
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/Potok.Backend.TorrentGo
+          file: ./src/Potok.Backend.TorrentGo/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-torrentgo.outputs.tags }}
+          labels: ${{ steps.meta-torrentgo.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --- Build & Push: Gateway ---
+      - name: Extract Gateway metadata
+        id: meta-gateway
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-gateway
+
+      - name: Build and Push Gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./src/Potok.Backend.Gateway/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-gateway.outputs.tags }}
+          labels: ${{ steps.meta-gateway.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --- Build & Push: SearchEngine ---
+      - name: Extract SearchEngine metadata
+        id: meta-searchengine
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-searchengine
+
+      - name: Build and Push SearchEngine
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./src/Potok.Backend.SearchEngine/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-searchengine.outputs.tags }}
+          labels: ${{ steps.meta-searchengine.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
