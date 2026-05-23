@@ -1,5 +1,3 @@
-using System;
-
 namespace Potok.Backend.Core.Entities;
 
 public enum InfuseItemStatus

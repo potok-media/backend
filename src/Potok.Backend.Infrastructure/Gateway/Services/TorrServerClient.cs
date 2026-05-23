@@ -5,7 +5,6 @@ using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models;
 using Potok.Backend.Infrastructure.Configuration;
-using TorrentTitleParser;
 
 namespace Potok.Backend.Infrastructure.Gateway.Services;
 

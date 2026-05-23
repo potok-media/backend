@@ -6,11 +6,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Options;
-using Potok.Backend.Core.Utils;
 using Potok.Backend.Infrastructure.BackgroundHosting;
 using Potok.Backend.Infrastructure.BackgroundHosting.Media;
 using Potok.Backend.Infrastructure.BackgroundHosting.Refresh;
@@ -28,7 +26,6 @@ using Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.MegaPeer;
 using Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.NNMClub;
 using Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.RuTor;
 using Potok.Backend.Infrastructure.SearchEngine.Services.Trackers.RuTracker;
-using Serilog;
 
 namespace Potok.Backend.Infrastructure.Configuration;
 

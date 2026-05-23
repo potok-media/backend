@@ -8,8 +8,9 @@ public class SystemController : ControllerBase
     [HttpGet("api/handshake")]
     public IActionResult Handshake()
     {
-        return Ok(new { 
-            name = "Potok Gateway", 
+        return Ok(new
+        {
+            name = "Potok Gateway",
             version = "0.2.0",
             platform = "dotnet-10"
         });
@@ -21,7 +22,6 @@ public class SystemController : ControllerBase
         switch (request.Action)
         {
             case "clear-cache":
-                // In memory cache clearing would go here
                 return Ok(new { success = true, message = "Cache cleared" });
             
             default:

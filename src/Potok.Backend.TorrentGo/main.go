@@ -145,6 +145,24 @@ func main() {
 	defer monitorCancel()
 	go speedMonitor.Start(monitorCtx)
 
+	// 3.5 Initialize CacheManager with 12-Factor Env configuration
+	timeout := 30 * time.Minute
+	if tEnv := os.Getenv("POTOK_CACHE_TIMEOUT"); tEnv != "" {
+		if parsed, err := time.ParseDuration(tEnv); err == nil {
+			timeout = parsed
+		}
+	}
+
+	checkInterval := 1 * time.Minute
+	if cEnv := os.Getenv("POTOK_CACHE_CHECK_INTERVAL"); cEnv != "" {
+		if parsed, err := time.ParseDuration(cEnv); err == nil {
+			checkInterval = parsed
+		}
+	}
+
+	cacheManager = NewCacheManager(torrentClient, cacheDir, timeout, checkInterval)
+	go cacheManager.Start(monitorCtx)
+
 	// 4. Setup HTTP Router
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -153,8 +171,9 @@ func main() {
 
 	// Health check
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("OK"))
+		w.WriteHeader(http.StatusOK)
 	})
+
 
 	// API routes
 	r.Route("/api/torrent", func(r chi.Router) {

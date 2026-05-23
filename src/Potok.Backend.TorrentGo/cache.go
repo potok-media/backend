@@ -1,0 +1,176 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/anacrolix/torrent"
+)
+
+type CacheManager struct {
+	client        *torrent.Client
+	cacheDir      string
+	timeout       time.Duration
+	checkInterval time.Duration
+
+	mu          sync.RWMutex
+	lastActive  map[string]time.Time
+	activeCount map[string]int
+}
+
+func NewCacheManager(client *torrent.Client, cacheDir string, timeout time.Duration, checkInterval time.Duration) *CacheManager {
+	return &CacheManager{
+		client:        client,
+		cacheDir:      cacheDir,
+		timeout:       timeout,
+		checkInterval: checkInterval,
+		lastActive:    make(map[string]time.Time),
+		activeCount:   make(map[string]int),
+	}
+}
+
+func (cm *CacheManager) Touch(hash string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.lastActive[hash] = time.Now()
+}
+
+func (cm *CacheManager) IncrementActive(hash string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.activeCount[hash]++
+	cm.lastActive[hash] = time.Now()
+}
+
+func (cm *CacheManager) DecrementActive(hash string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.activeCount[hash]--
+	if cm.activeCount[hash] < 0 {
+		cm.activeCount[hash] = 0
+	}
+	cm.lastActive[hash] = time.Now()
+}
+
+func (cm *CacheManager) IsStreaming(hash string) bool {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.activeCount[hash] > 0
+}
+
+func (cm *CacheManager) Delete(hash string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	delete(cm.lastActive, hash)
+	delete(cm.activeCount, hash)
+}
+
+func (cm *CacheManager) Start(ctx context.Context) {
+	slog.Info("CacheManager background worker started", 
+		slog.Duration("timeout", cm.timeout), 
+		slog.Duration("checkInterval", cm.checkInterval),
+	)
+	
+	ticker := time.NewTicker(cm.checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("CacheManager worker stopped cleanly.")
+			return
+		case <-ticker.C:
+			cm.Clean()
+		}
+	}
+}
+
+func (cm *CacheManager) Clean() {
+	torrents := cm.client.Torrents()
+	now := time.Now()
+
+	for _, t := range torrents {
+		hashHex := t.InfoHash().HexString()
+
+		cm.mu.RLock()
+		activeCount := cm.activeCount[hashHex]
+		lastTouch, ok := cm.lastActive[hashHex]
+		cm.mu.RUnlock()
+
+		if !ok {
+			cm.Touch(hashHex)
+			continue
+		}
+
+		if activeCount > 0 {
+			cm.Touch(hashHex) 
+			continue
+		}
+
+		if now.Sub(lastTouch) > cm.timeout {
+			slog.Info("CacheManager: Inactive torrent detected. Starting purge...", 
+				slog.String("hash", hashHex), 
+				slog.Duration("idleDuration", now.Sub(lastTouch)),
+			)
+			cm.PurgeTorrent(t)
+		}
+	}
+}
+
+func (cm *CacheManager) PurgeTorrent(t *torrent.Torrent) {
+	hashHex := t.InfoHash().HexString()
+
+	// 1. Gather file paths only if metadata is resolved
+	pathsToDelete := []string{}
+	if t.Info() != nil {
+		for _, file := range t.Files() {
+			pathsToDelete = append(pathsToDelete, filepath.Join(cm.cacheDir, file.Path()))
+		}
+	}
+
+	// 2. Drop torrent from client memory
+	t.Drop()
+	cm.Delete(hashHex)
+	slog.Info("Torrent dropped from client memory", slog.String("hash", hashHex))
+
+	// 3. Delete files from disk
+	for _, p := range pathsToDelete {
+		if err := os.Remove(p); err == nil {
+			slog.Debug("Deleted cached file", slog.String("path", p))
+			// Recursive parent empty directory cleanup
+			cm.removeEmptyDirs(filepath.Dir(p))
+		}
+	}
+
+	// 4. Delete the dedicated hash folder
+	hashDir := filepath.Join(cm.cacheDir, hashHex)
+	if _, err := os.Stat(hashDir); err == nil {
+		os.RemoveAll(hashDir)
+		slog.Info("Deleted torrent hash folder", slog.String("path", hashDir))
+	}
+}
+
+func (cm *CacheManager) removeEmptyDirs(dirPath string) {
+	current := filepath.Clean(dirPath)
+	root := filepath.Clean(cm.cacheDir)
+
+	for current != root && strings.HasPrefix(current, root) {
+		entries, err := os.ReadDir(current)
+		if err != nil || len(entries) > 0 {
+			return // Not empty or error
+		}
+
+		if err := os.Remove(current); err != nil {
+			slog.Warn("Failed to remove directory", slog.String("dir", current), slog.String("error", err.Error()))
+			return
+		}
+		
+		slog.Debug("Removed empty parent directory", slog.String("dir", current))
+		current = filepath.Dir(current)
+	}
+}

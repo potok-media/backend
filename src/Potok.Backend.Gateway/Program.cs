@@ -1,7 +1,6 @@
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Infrastructure.Configuration;
 using Serilog;
-using Serilog.Events;
 using Serilog.Sinks.SystemConsole.Themes;
 
 var cleanTheme = new AnsiConsoleTheme(new Dictionary<ConsoleThemeStyle, string>
@@ -98,6 +97,7 @@ using (var scope = app.Services.CreateScope())
     await torrentRepo.EnsureDatabaseAsync();
 }
 
+app.MapGet("/health", () => Results.Ok());
 app.MapControllers();
 
 app.Run();

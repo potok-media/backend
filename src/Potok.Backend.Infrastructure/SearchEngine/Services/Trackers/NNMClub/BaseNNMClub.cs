@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Enums;

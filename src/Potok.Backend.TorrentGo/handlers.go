@@ -36,6 +36,8 @@ var defaultTrackers = [][]string{
 	{"udp://exodus.desync.com:6969/announce"},
 }
 
+var cacheManager *CacheManager
+
 type TorrentFilesRequest struct {
 	Title           string  `json:"title"`
 	EnglishTitle    *string `json:"englishTitle,omitempty"`
@@ -118,6 +120,7 @@ func HandleGetFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hashHex := t.InfoHash().HexString()
+	cacheManager.Touch(hashHex)
 	videoExtensions := map[string]bool{
 		".mkv": true,
 		".mp4": true,
@@ -209,6 +212,7 @@ func HandleGetStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Torrent not found", http.StatusNotFound)
 		return
 	}
+	cacheManager.Touch(hashHex)
 
 	stats := t.Stats()
 	speeds := speedMonitor.GetSpeed(hashHex)
@@ -262,30 +266,7 @@ func HandleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Stopping and removing torrent: %s", hashHex)
-	pathsToDelete := []string{}
-	for _, file := range t.Files() {
-		pathsToDelete = append(pathsToDelete, filepath.Join(cacheDir, file.Path()))
-	}
-
-	// Drop torrent from client
-	t.Drop()
-
-	// Clean up files and parent directories
-	for _, p := range pathsToDelete {
-		os.Remove(p) // Delete file if exists
-
-		// Clean up parent directory if empty
-		dir := filepath.Dir(p)
-		if dir != cacheDir && strings.HasPrefix(dir, cacheDir) {
-			os.Remove(dir) // Will only delete if directory is empty
-		}
-	}
-
-	// Also delete any subdirectory matching hashHex
-	hashDir := filepath.Join(cacheDir, hashHex)
-	if _, err := os.Stat(hashDir); err == nil {
-		os.RemoveAll(hashDir)
-	}
+	cacheManager.PurgeTorrent(t)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
@@ -309,6 +290,9 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Torrent not active. Please add it first.", http.StatusNotFound)
 		return
 	}
+
+	cacheManager.IncrementActive(hashHex)
+	defer cacheManager.DecrementActive(hashHex)
 
 	fileIndex, err := strconv.Atoi(fileIndexStr)
 	if err != nil || fileIndex < 1 {

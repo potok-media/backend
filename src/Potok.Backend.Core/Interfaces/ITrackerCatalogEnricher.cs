@@ -1,5 +1,3 @@
-using System.Threading;
-using System.Threading.Tasks;
 using Potok.Backend.Core.Models.Details;
 
 namespace Potok.Backend.Core.Interfaces;

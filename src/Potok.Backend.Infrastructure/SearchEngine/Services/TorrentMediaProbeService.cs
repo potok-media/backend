@@ -6,10 +6,6 @@ using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Options;
 using Potok.Backend.Core.Models.Tracks;
-using Potok.Backend.Core.Utils;
-
-using System.Net.Http;
-using System.Net.Http.Headers;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services;
 

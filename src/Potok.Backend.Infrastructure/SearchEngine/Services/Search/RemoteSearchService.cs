@@ -9,7 +9,6 @@ using Potok.Backend.Core.Enums;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
-using Potok.Backend.Core.Utils;
 using Potok.Backend.Infrastructure.Http;
 using Serilog;
 

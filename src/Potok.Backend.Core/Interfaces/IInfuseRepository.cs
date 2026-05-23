@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
 using Potok.Backend.Core.Entities;
 
 namespace Potok.Backend.Core.Interfaces;

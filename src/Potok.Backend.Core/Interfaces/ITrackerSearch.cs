@@ -1,4 +1,3 @@
-using System.Threading;
 using Potok.Backend.Core.Enums;
 using Potok.Backend.Core.Models.Details;
 
