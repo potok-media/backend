@@ -35,30 +35,34 @@ public class SettingsController : ControllerBase
     }
 
     [HttpPost("sync")]
-    public async Task<IActionResult> SyncSettings([FromBody] JsonElement payload)
+    public async Task<IActionResult> SyncSettings([FromBody] SyncSettingsRequest request)
     {
-        // The client might send a wrapper { "settings": { ... }, "timestamp": ... }
-        var settingsElement = payload;
-        if (payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty("settings", out var sProp))
+        if (request?.Settings == null) return BadRequest("Invalid settings payload");
+
+        if (!string.IsNullOrEmpty(request.Settings.SearchEngineUrl))
         {
-            settingsElement = sProp;
+            await _settingsRepository.SetValueAsync("searchEngineUrl", request.Settings.SearchEngineUrl);
         }
 
-        if (settingsElement.ValueKind != JsonValueKind.Object) return BadRequest("Invalid settings payload");
-
-        foreach (var property in settingsElement.EnumerateObject())
+        if (request.Settings.TorrServer != null)
         {
-            var key = property.Name;
-            var value = property.Value.ValueKind == JsonValueKind.String 
-                ? property.Value.GetString() 
-                : property.Value.GetRawText();
-            
-            if (value != null)
+            var torrServerJson = JsonSerializer.Serialize(request.Settings.TorrServer, new JsonSerializerOptions
             {
-                await _settingsRepository.SetValueAsync(key, value);
-            }
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
+            await _settingsRepository.SetValueAsync("torrServer", torrServerJson);
         }
 
         return Ok(new { success = true });
     }
 }
+
+public record SyncSettingsRequest(SettingsPayload Settings);
+public record SettingsPayload(string? SearchEngineUrl, TorrServerSettingsDto? TorrServer);
+public record TorrServerSettingsDto(
+    string? BaseUrl,
+    bool AuthEnabled,
+    string? AuthLogin,
+    string? AuthPassword,
+    bool? SaveToDb = true
+);

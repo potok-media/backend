@@ -32,11 +32,7 @@ public class TorrServerClient : ITorrServerClient
         var json = await _settingsRepository.GetValueAsync("torrServer");
         if (string.IsNullOrEmpty(json))
         {
-            if (!string.IsNullOrEmpty(_options.DefaultTorrServerUrl))
-            {
-                return new TorrServerConfig(_options.DefaultTorrServerUrl, false, null, null);
-            }
-            return new TorrServerConfig("http://localhost:5050", false, null, null);
+            throw new Exception("TORRSERVER_NOT_CONFIGURED");
         }
 
         try
@@ -50,7 +46,7 @@ public class TorrServerClient : ITorrServerClient
         }
         catch { /* Ignore */ }
 
-        return new TorrServerConfig("http://localhost:5050", false, null, null);
+        throw new Exception("TORRSERVER_NOT_CONFIGURED");
     }
 
     public async Task<TorrentFilesResponse> GetFilesAsync(TorrentFilesRequest request)

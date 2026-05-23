@@ -132,6 +132,19 @@ app.UseSerilogRequestLogging(loggingOptions =>
 
         diagnosticContext.Set("Url", fullUrl);
     };
+
+    loggingOptions.GetLevel = (httpContext, elapsedMs, ex) =>
+    {
+        if (ex != null) return Serilog.Events.LogEventLevel.Error;
+        if (httpContext.Request.Path.StartsWithSegments("/health") || 
+            httpContext.Request.Path.StartsWithSegments("/api/health"))
+        {
+            return httpContext.Response.StatusCode >= 500 
+                ? Serilog.Events.LogEventLevel.Error 
+                : Serilog.Events.LogEventLevel.Verbose;
+        }
+        return Serilog.Events.LogEventLevel.Information;
+    };
 });
 
 app.MapControllers();

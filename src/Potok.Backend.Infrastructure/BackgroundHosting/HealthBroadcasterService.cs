@@ -37,7 +37,7 @@ public class HealthBroadcasterService : BackgroundService
         {
             try
             {
-                var searchUrl = await _settingsRepository.GetValueAsync("searchEngineUrl") ?? _options.DefaultSearchEngineUrl;
+                var searchUrl = await _settingsRepository.GetValueAsync("searchEngineUrl");
                 var searchStatus = await CheckHealthAsync(searchUrl);
 
                 var torrentUrl = await GetTorrServerUrlAsync();
@@ -82,7 +82,7 @@ public class HealthBroadcasterService : BackgroundService
     private async Task<string?> GetTorrServerUrlAsync()
     {
         var json = await _settingsRepository.GetValueAsync("torrServer");
-        if (string.IsNullOrEmpty(json)) return _options.DefaultTorrServerUrl;
+        if (string.IsNullOrEmpty(json)) return null;
 
         try
         {
@@ -94,6 +94,6 @@ public class HealthBroadcasterService : BackgroundService
         }
         catch { }
 
-        return _options.DefaultTorrServerUrl;
+        return null;
     }
 }

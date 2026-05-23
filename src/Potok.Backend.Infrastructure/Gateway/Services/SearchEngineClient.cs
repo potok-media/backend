@@ -28,7 +28,12 @@ public class SearchEngineClient : ISearchEngineClient
 
     public async Task<TorrentSearchResponse> SearchAsync(TorrentSearchRequest request)
     {
-        var searchEngineUrl = await _settingsRepository.GetValueAsync("searchEngineUrl") ?? _options.DefaultSearchEngineUrl;
+        var searchEngineUrl = await _settingsRepository.GetValueAsync("searchEngineUrl");
+        if (string.IsNullOrEmpty(searchEngineUrl))
+        {
+            throw new Exception("SEARCH_ENGINE_NOT_CONFIGURED");
+        }
+
         var url = $"{searchEngineUrl.TrimEnd('/')}/api/v1/torrents/search";
 
         try

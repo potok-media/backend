@@ -33,7 +33,9 @@ public class HealthController : ControllerBase
     [HttpGet("search-engine")]
     public async Task<IActionResult> HealthSearchEngine()
     {
-        var url = await _settingsRepository.GetValueAsync("searchEngineUrl") ?? _options.DefaultSearchEngineUrl;
+        var url = await _settingsRepository.GetValueAsync("searchEngineUrl");
+        if (string.IsNullOrEmpty(url)) return StatusCode(501);
+
         return await ProxyHealthCheckAsync(url);
     }
 
@@ -56,10 +58,7 @@ public class HealthController : ControllerBase
             catch { /* Ignore parsing issues */ }
         }
 
-        if (string.IsNullOrEmpty(url))
-        {
-            url = _options.DefaultTorrServerUrl;
-        }
+        if (string.IsNullOrEmpty(url)) return StatusCode(501);
 
         return await ProxyHealthCheckAsync(url);
     }
