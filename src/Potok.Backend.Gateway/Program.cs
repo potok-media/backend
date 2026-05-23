@@ -55,11 +55,22 @@ builder.Host.UseSerilog(Log.Logger, dispose: true);
 // Add services to the container.
 builder.Services.AddSharedInfrastructure(builder.Configuration);
 builder.Services.AddGatewayInfrastructure(builder.Configuration);
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy.SetIsOriginAllowed(origin => true)
+              .AllowAnyMethod()
+              .AllowAnyHeader()
+              .AllowCredentials();
+    });
+});
 
 var app = builder.Build();
 
 app.UseExceptionHandler();
 app.UseSerilogRequestLogging();
+app.UseCors("AllowAll");
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
