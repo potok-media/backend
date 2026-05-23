@@ -13,6 +13,15 @@ on:
           - torrentgo
           - gateway
           - searchengine
+      bump_type:
+        description: 'Тип обновления версии'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: 'patch'
 
 env:
   REGISTRY: ghcr.io
@@ -22,13 +31,68 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
       id-token: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # --- Versioning ---
+      - name: Extract Bump Type
+        id: parse_bump
+        run: |
+          INPUT_TYPE="${{ github.event.inputs.bump_type }}"
+          if [[ "$INPUT_TYPE" == *"major"* ]]; then
+            echo "BUMP=major" >> $GITHUB_ENV
+          elif [[ "$INPUT_TYPE" == *"minor"* ]]; then
+            echo "BUMP=minor" >> $GITHUB_ENV
+          else
+            echo "BUMP=patch" >> $GITHUB_ENV
+          fi
+
+      - name: Get current version and bump
+        id: get_version
+        run: |
+          if [ ! -f VERSION ]; then
+            echo "1.0.0" > VERSION
+          fi
+          CURRENT_VERSION=$(cat VERSION)
+          
+          IFS='.' read -r -a parts <<< "$CURRENT_VERSION"
+          MAJOR="${parts[0]:-1}"
+          MINOR="${parts[1]:-0}"
+          PATCH="${parts[2]:-0}"
+          
+          if [ "${{ env.BUMP }}" = "major" ]; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          elif [ "${{ env.BUMP }}" = "minor" ]; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
+          
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "$NEW_VERSION" > VERSION
+          echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
+          
+          # Update .csproj files
+          find src -name "*.csproj" -exec sed -i "s|<PropertyGroup>|<PropertyGroup>\n        <Version>$NEW_VERSION</Version>|g" {} +
+          # Prevent duplicate Version tags if they already existed (simple approach)
+          find src -name "*.csproj" -exec sed -i "N;s|<Version>.*</Version>\n.*<Version>|<Version>|;P;D" {} +
+
+      - name: Commit version bump
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git commit -am "Bump backend version to ${{ env.new_version }}"
+          git push
 
       # Set up Buildx runner
       - name: Set up Docker Buildx
@@ -56,6 +120,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-torrentgo
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ env.new_version }}
 
       - name: Build and Push TorrentGo
         if: github.event.inputs.service == 'all' || github.event.inputs.service == 'torrentgo'
@@ -76,6 +143,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-gateway
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ env.new_version }}
 
       - name: Build and Push Gateway
         if: github.event.inputs.service == 'all' || github.event.inputs.service == 'gateway'
@@ -96,6 +166,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-searchengine
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ env.new_version }}
 
       - name: Build and Push SearchEngine
         if: github.event.inputs.service == 'all' || github.event.inputs.service == 'searchengine'
@@ -108,3 +181,11 @@ jobs:
           labels: ${{ steps.meta-searchengine.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # --- Create GitHub Release ---
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ env.new_version }}
+          name: Backend Release v${{ env.new_version }}
+          generate_release_notes: true
