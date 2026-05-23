@@ -12,15 +12,18 @@ public class TorrentsController : ControllerBase
     private readonly ISearchEngineClient _searchEngineClient;
     private readonly ITorrServerClient _torrServerClient;
     private readonly ITorrentRepository _torrentRepository;
+    private readonly IEventBroadcaster _eventBroadcaster;
 
     public TorrentsController(
         ISearchEngineClient searchEngineClient, 
         ITorrServerClient torrServerClient,
-        ITorrentRepository torrentRepository)
+        ITorrentRepository torrentRepository,
+        IEventBroadcaster eventBroadcaster)
     {
         _searchEngineClient = searchEngineClient;
         _torrServerClient = torrServerClient;
         _torrentRepository = torrentRepository;
+        _eventBroadcaster = eventBroadcaster;
     }
 
     [HttpPost("search")]
@@ -56,6 +59,7 @@ public class TorrentsController : ControllerBase
         if (string.IsNullOrEmpty(hash)) return BadRequest("Hash is required");
 
         await _torrentRepository.SetOverrideAsync(hash, season, offset);
+        _eventBroadcaster.Publish("override-updated", new { hash = hash, season = season, episodeOffset = offset });
         return Ok(new { success = true });
     }
 

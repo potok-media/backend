@@ -61,6 +61,7 @@ public static class ServicesConfiguration
             .AddTransient<TraktApiHandler>();
 
         services.AddSingleton<ICacheService, CacheService>();
+        services.AddSingleton<IEventBroadcaster, EventBroadcaster>();
         services.AddMemoryCache();
         
         services.AddScoped<Potok.Backend.Infrastructure.Http.TrackerHttpClient>();
@@ -228,6 +229,7 @@ public static class ServicesConfiguration
         services.AddHostedService<TorrentMediaProbeHostedService>();
         services.AddHostedService<RuTrackerPopularHostedService>();
         services.AddHostedService<RefreshHostedService>();
+        services.AddHostedService<HealthBroadcasterService>();
 
         return services;
     }

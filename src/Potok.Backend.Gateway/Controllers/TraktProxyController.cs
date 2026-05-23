@@ -104,9 +104,12 @@ public class TraktProxyController : ControllerBase
             }
         }
 
-        if (Request.ContentLength > 0)
+        if (Request.ContentLength > 0 || Request.Headers.ContainsKey("Transfer-Encoding"))
         {
-            requestMessage.Content = new StreamContent(Request.Body);
+            using var ms = new MemoryStream();
+            await Request.Body.CopyToAsync(ms);
+            var bytes = ms.ToArray();
+            requestMessage.Content = new ByteArrayContent(bytes);
             if (Request.ContentType != null)
             {
                 requestMessage.Content.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse(Request.ContentType);
