@@ -2,7 +2,7 @@ using Dapper;
 using Npgsql;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models.Database;
-using Potok.Backend.Infrastructure.SearchEngine.Migrations.Configurations;
+using Potok.Backend.Infrastructure.Migrations.Configurations;
 
 namespace Potok.Backend.Infrastructure.Persistence.Repositories;
 

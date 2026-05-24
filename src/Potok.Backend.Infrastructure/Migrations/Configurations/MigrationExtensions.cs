@@ -3,7 +3,7 @@ using FluentMigrator.Runner.VersionTableInfo;
 using Microsoft.Extensions.DependencyInjection;
 using Potok.SearchEngine.Infrastructure.Migrations;
 
-namespace Potok.Backend.Infrastructure.SearchEngine.Migrations.Configurations;
+namespace Potok.Backend.Infrastructure.Migrations.Configurations;
 
 public static class MigrationExtensions
 {

@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Http.Extensions;
 using Microsoft.AspNetCore.HttpOverrides;
 using Potok.Backend.Core.Models.Options;
 using Potok.Backend.Infrastructure.Configuration;
-using Potok.Backend.Infrastructure.SearchEngine.Migrations.Configurations;
+using Potok.Backend.Infrastructure.Migrations.Configurations;
 using Potok.Backend.SearchEngine;
 using Scalar.AspNetCore;
 using Serilog;

@@ -1,4 +1,4 @@
-namespace Potok.Backend.Infrastructure.SearchEngine.Migrations.Configurations;
+namespace Potok.Backend.Infrastructure.Migrations.Configurations;
 
 internal static class DbSchema
 {

@@ -1,5 +1,5 @@
 using FluentMigrator;
-using Potok.Backend.Infrastructure.SearchEngine.Migrations.Configurations;
+using Potok.Backend.Infrastructure.Migrations.Configurations;
 
 namespace Potok.SearchEngine.Infrastructure.Migrations;
 

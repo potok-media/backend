@@ -10,7 +10,7 @@ using Potok.Backend.Core.Models.Details;
 using Potok.Backend.Core.Models.Options;
 using Potok.Backend.Core.Utils;
 using Potok.Backend.Infrastructure.Http;
-using Potok.Backend.Infrastructure.SearchEngine.Migrations.Configurations;
+using Potok.Backend.Infrastructure.Migrations.Configurations;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services.Search;
 
