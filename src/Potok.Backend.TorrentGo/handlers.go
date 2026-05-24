@@ -397,67 +397,105 @@ func getOrAddTorrent(link string) (*torrent.Torrent, error) {
 }
 
 // parseSeasonAndEpisode extracts season and episode numbers from title string or path
+type regexItem struct {
+	re   *regexp.Regexp
+	keys []string
+}
+
+var torrentRegexes = []regexItem{
+	{regexp.MustCompile(`\bs([0-9]+)\.?ep?([0-9]+)\b`), []string{"season", "episode"}},
+	{regexp.MustCompile(`\b([0-9]{1,2})[x-]([0-9]+)\b`), []string{"season", "episode"}},
+	{regexp.MustCompile(`\bs([0-9]{2})([0-9]{2,3})\b`), []string{"season", "episode"}},
+	{regexp.MustCompile(`season ([0-9]+) episode ([0-9]+)`), []string{"season", "episode"}},
+	{regexp.MustCompile(`сезон ([0-9]+) серия ([0-9]+)`), []string{"season", "episode"}},
+	{regexp.MustCompile(`([0-9]+) season ([0-9]+) episode`), []string{"season", "episode"}},
+	{regexp.MustCompile(`([0-9]+) сезон ([0-9]+) серия`), []string{"season", "episode"}},
+	{regexp.MustCompile(`episode ([0-9]+)`), []string{"episode"}},
+	{regexp.MustCompile(`серия ([0-9]+)`), []string{"episode"}},
+	{regexp.MustCompile(`([0-9]+) episode`), []string{"episode"}},
+	{regexp.MustCompile(`([0-9]+) серия`), []string{"episode"}},
+	{regexp.MustCompile(`season ([0-9]+)`), []string{"season"}},
+	{regexp.MustCompile(`сезон ([0-9]+)`), []string{"season"}},
+	{regexp.MustCompile(`([0-9]+) season`), []string{"season"}},
+	{regexp.MustCompile(`([0-9]+) сезон`), []string{"season"}},
+	{regexp.MustCompile(`\bs([0-9]+)\b`), []string{"season"}},
+	{regexp.MustCompile(`\bep?\.?([0-9]+)\b`), []string{"episode"}},
+	{regexp.MustCompile(`\b([0-9]{1,3}) of ([0-9]+)`), []string{"episode"}},
+	{regexp.MustCompile(`\b([0-9]{1,3}) из ([0-9]+)`), []string{"episode"}},
+	{regexp.MustCompile(` - ([0-9]{1,3})\b`), []string{"episode"}},
+	{regexp.MustCompile(`\[([0-9]{1,3})\]`), []string{"episode"}},
+	{regexp.MustCompile(`([0-9]+) сер`), []string{"episode"}},
+}
+
+var folderRegexes = []*regexp.Regexp{
+	regexp.MustCompile(`season ([0-9]+)`),
+	regexp.MustCompile(`сезон ([0-9]+)`),
+	regexp.MustCompile(`([0-9]+) season`),
+	regexp.MustCompile(`([0-9]+) сезон`),
+	regexp.MustCompile(`\bs([0-9]+)\b`),
+}
+
 func parseSeasonAndEpisode(path string) (*int, *int) {
-	name := filepath.Base(path)
+	// First clean path: replace underscores with spaces, similar to Swift client
+	cleanPath := strings.ReplaceAll(path, "_", " ")
+	
+	name := filepath.Base(cleanPath)
 	nameLower := strings.ToLower(name)
-	pathLower := strings.ToLower(path)
 
 	var season, episode *int
 
-	// Season regexes
-	seasonRegexes := []*regexp.Regexp{
-		regexp.MustCompile(`\bs([0-9]+)\b`),                         // s03 / s3
-		regexp.MustCompile(`(?:season|сезон)[\s._-]*([0-9]+)`),      // season 3 / сезон 3
-		regexp.MustCompile(`(?:tv|тв)[\s._-]*([0-9]+)`),             // tv-3 / тв-3
-		regexp.MustCompile(`([0-9]+)(?:st|nd|rd|th)[\s._-]*season`), // 3rd season
-	}
-
-	for _, re := range seasonRegexes {
-		matches := re.FindStringSubmatch(pathLower)
+	// 1. Parse filename using the ordered regexes
+	for _, item := range torrentRegexes {
+		matches := item.re.FindStringSubmatch(nameLower)
 		if len(matches) > 1 {
-			if val, err := strconv.Atoi(matches[1]); err == nil {
-				season = &val
-				break
-			}
-		}
-	}
-
-	// Episode regexes
-	episodeRegexes := []*regexp.Regexp{
-		regexp.MustCompile(`\b(?:e|ep)[\s._-]*([0-9]+)\b`),             // e02 / ep02
-		regexp.MustCompile(`(?:episode|серия|эпизод)[\s._-]*([0-9]+)`), // episode 2 / серия 2
-		regexp.MustCompile(`\b-\s*([0-9]+)\b`),                         // - 02.mkv
-		regexp.MustCompile(`[\[\(\s]([0-9]+)[\]\)\s]`),                 // [02] or (02)
-	}
-
-	for _, re := range episodeRegexes {
-		matches := re.FindStringSubmatch(nameLower)
-		if len(matches) > 1 {
-			if val, err := strconv.Atoi(matches[1]); err == nil {
-				episode = &val
-				break
-			}
-		}
-	}
-
-	// Standalone "3 - 15" format (Season 3, Episode 15)
-	if season == nil {
-		reStandAlone := regexp.MustCompile(`\b([0-9]+)\s*-\s*([0-9]+)\b`)
-		matches := reStandAlone.FindStringSubmatch(nameLower)
-		if len(matches) > 2 {
-			if sVal, err := strconv.Atoi(matches[1]); err == nil {
-				if epVal, err := strconv.Atoi(matches[2]); err == nil {
-					season = &sVal
-					episode = &epVal
+			for idx, key := range item.keys {
+				if idx+1 < len(matches) {
+					valStr := matches[idx+1]
+					if val, err := strconv.Atoi(valStr); err == nil {
+						if key == "season" && season == nil {
+							season = &val
+						} else if key == "episode" && episode == nil {
+							episode = &val
+						}
+					}
 				}
 			}
 		}
 	}
 
-	// Fallback to finding any standalone number in filename that is not a video resolution
+	// 2. Parse folder name if season is still missing
+	dir := filepath.Dir(cleanPath)
+	if dir != "" && dir != "." && season == nil {
+		folderName := filepath.Base(dir)
+		folderLower := strings.ToLower(folderName)
+		for _, re := range folderRegexes {
+			matches := re.FindStringSubmatch(folderLower)
+			if len(matches) > 1 {
+				if val, err := strconv.Atoi(matches[1]); err == nil {
+					season = &val
+					break
+				}
+			}
+		}
+	}
+
+	// 3. Special case: episode number at the very beginning of filename (e.g. "01.mkv")
+	if episode == nil {
+		reStartNum := regexp.MustCompile(`^([0-9]{1,3})\b`)
+		matches := reStartNum.FindStringSubmatch(nameLower)
+		if len(matches) > 1 {
+			if val, err := strconv.Atoi(matches[1]); err == nil {
+				episode = &val
+			}
+		}
+	}
+
+	// 4. Fallback to finding any standalone number in filename that is not a video resolution
 	if episode == nil {
 		reNum := regexp.MustCompile(`\b([0-9]{1,3})\b`)
 		matches := reNum.FindAllStringSubmatch(nameLower, -1)
+		
+		var validNums []int
 		for _, match := range matches {
 			if len(match) > 1 {
 				valStr := match[1]
@@ -465,12 +503,22 @@ func parseSeasonAndEpisode(path string) (*int, *int) {
 					continue
 				}
 				if val, err := strconv.Atoi(valStr); err == nil {
-					if season != nil && *season == val {
-						continue
-					}
-					episode = &val
-					break
+					validNums = append(validNums, val)
 				}
+			}
+		}
+
+		if len(validNums) == 1 {
+			// If there is only one standalone number, it must be the episode
+			episode = &validNums[0]
+		} else if len(validNums) > 1 {
+			// If there are multiple, try to skip the one that equals the season
+			for _, val := range validNums {
+				if season != nil && *season == val {
+					continue
+				}
+				episode = &val
+				break
 			}
 		}
 	}

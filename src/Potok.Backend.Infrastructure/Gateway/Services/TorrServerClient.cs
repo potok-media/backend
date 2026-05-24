@@ -104,7 +104,7 @@ public class TorrServerClient : ITorrServerClient
         var hash = GetHashFromMagnet(request.MagnetUri) ?? request.Hash;
         var baseUrl = config.BaseUrl.TrimEnd('/');
         
-        var streamUrl = GenerateStreamUrl(baseUrl, hash, request.Index, request.MediaType, request.Season, request.Episode, request.EnglishTitle, request.OriginalTitle, request.Title, request.TmdbId?.ToString());
+        var streamUrl = GenerateStreamUrl(baseUrl, hash, request.Index, request.Path, request.MediaType, request.Season, request.Episode, request.EnglishTitle, request.OriginalTitle, request.Title, request.TmdbId?.ToString());
 
         return new TorrentStreamResponse(streamUrl);
     }
@@ -121,25 +121,46 @@ public class TorrServerClient : ITorrServerClient
         var hash = filesResponse.Hash ?? "";
         
         return filesResponse.Items.Select(file => 
-            GenerateStreamUrl(baseUrl, hash, file.Id, request.MediaType, file.Season, file.Episode, request.EnglishTitle, request.OriginalTitle, request.Title, request.TmdbId?.ToString())
+            GenerateStreamUrl(baseUrl, hash, file.Id, file.Path, request.MediaType, file.Season, file.Episode, request.EnglishTitle, request.OriginalTitle, request.Title, request.TmdbId?.ToString())
         ).ToList();
     }
 
-    private string GenerateStreamUrl(string baseUrl, string hash, string index, string? mediaType, int? season, int? episode, string? englishTitle, string? originalTitle, string? title, string? tmdbId)
+    private string GenerateStreamUrl(string baseUrl, string hash, string index, string? originalPath, string? mediaType, int? season, int? episode, string? englishTitle, string? originalTitle, string? title, string? tmdbId)
     {
-        var rawTitle = englishTitle ?? originalTitle ?? title ?? "{tmdb-" + tmdbId + "}";
-        var tmdbTag = "{tmdb-" + tmdbId + "}";
-        var cleanTitle = Regex.Replace(rawTitle, @"[^a-zA-Z0-9\s]", "");
-        cleanTitle = Regex.Replace(cleanTitle, @"\s+", ".");
+        var ext = ".mkv";
+        if (!string.IsNullOrEmpty(originalPath))
+        {
+            var match = Regex.Match(originalPath, @"\.[a-zA-Z0-9]{2,5}$");
+            if (match.Success)
+            {
+                ext = match.Value;
+            }
+        }
+
+        // Priority: English -> Original -> Local
+        var rawTitle = englishTitle ?? originalTitle ?? title ?? "";
+        var cleanTitle = Regex.Replace(rawTitle, @"[^a-zA-Z0-9]+", ".");
+        cleanTitle = Regex.Replace(cleanTitle, @"\.{2,}", ".");
         cleanTitle = cleanTitle.Trim('.');
 
-        var fileName = cleanTitle;
-        if (mediaType == "tv")
+        if (string.IsNullOrEmpty(cleanTitle))
         {
-            fileName += $".S{(season ?? 1):D2}E{(episode ?? 1):D2}";
+            cleanTitle = "Media";
         }
-        fileName += $".{tmdbTag}.mkv";
-        fileName = fileName.Trim('.');
+
+        var idTag = !string.IsNullOrEmpty(tmdbId) ? $".{{tmdb-{tmdbId}}}" : "";
+        var fileName = cleanTitle;
+
+        if (mediaType == "tv" || season.HasValue)
+        {
+            var s = (season ?? 1).ToString("D2");
+            var e = (episode ?? 1).ToString("D2");
+            fileName = $"{cleanTitle}.S{s}E{e}{idTag}{ext}";
+        }
+        else
+        {
+            fileName = $"{cleanTitle}{idTag}{ext}";
+        }
 
         return $"{baseUrl}/stream/{hash.ToLower()}/{index}/{fileName}";
     }
