@@ -77,7 +77,8 @@ public static class MediaMapper
             MediaType: "movie",
             Overview: movie.Overview,
             Genres: genres,
-            ImdbRating: voteAverage > 0 ? voteAverage : null,
+            TmdbRating: voteAverage > 0 ? voteAverage : null,
+            ImdbRating: null,
             IsInWatchlist: false,
             IsFavorite: false,
             Cast: MapCredits(movie.Credits?.Cast, baseUrl),
@@ -158,7 +159,8 @@ public static class MediaMapper
             MediaType: "tv",
             Overview: tvShow.Overview,
             Genres: genres,
-            ImdbRating: voteAverage > 0 ? voteAverage : null,
+            TmdbRating: voteAverage > 0 ? voteAverage : null,
+            ImdbRating: null,
             NumberOfSeasons: tvShow.NumberOfSeasons ?? tvShow.Seasons?.Count,
             IsInWatchlist: false,
             IsFavorite: false,
@@ -224,7 +226,7 @@ public static class MediaMapper
             PosterSrc: posterPath,
             BackdropSrc: backdropPath,
             MediaType: result.MediaType,
-            ImdbRating: voteAverage > 0 ? voteAverage : null
+            TmdbRating: voteAverage > 0 ? voteAverage : null
         );
     }
 

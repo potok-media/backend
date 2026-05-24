@@ -18,6 +18,7 @@ public record MediaCard(
     [property: JsonPropertyName("overview"), JsonProperty("overview")] string? Overview = null,
     [property: JsonPropertyName("genres"), JsonProperty("genres")] string? Genres = null,
     [property: JsonPropertyName("ageRating"), JsonProperty("ageRating")] string? AgeRating = null,
+    [property: JsonPropertyName("tmdbRating"), JsonProperty("tmdbRating")] double? TmdbRating = null,
     [property: JsonPropertyName("imdbRating"), JsonProperty("imdbRating")] double? ImdbRating = null,
     [property: JsonPropertyName("kpRating"), JsonProperty("kpRating")] double? KpRating = null,
     [property: JsonPropertyName("numberOfSeasons"), JsonProperty("numberOfSeasons")] int? NumberOfSeasons = null,
