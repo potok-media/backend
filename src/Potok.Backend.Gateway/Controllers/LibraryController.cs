@@ -37,6 +37,28 @@ public class LibraryController : ControllerBase
     [HttpGet("up-next")]
     public async Task<IActionResult> GetUpNext() => await GetLibraryItems("up_next", _orchestrator.GetUpNextAsync);
 
+    [HttpGet("profile")]
+    public async Task<IActionResult> GetProfile()
+    {
+        var accessToken = await _settings.GetValueAsync("trakt_access_token");
+        if (string.IsNullOrEmpty(accessToken))
+        {
+            _logger.Warning("Trakt access token not found in settings when fetching user profile");
+            return Unauthorized("Trakt not connected");
+        }
+
+        try
+        {
+            var profile = await _orchestrator.GetUserProfileAsync(accessToken);
+            return Ok(profile);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Failed to fetch Trakt profile");
+            return StatusCode(500, "Failed to fetch profile");
+        }
+    }
+
     private async Task<IActionResult> GetLibraryItems(string key, Func<string, string, Task<IEnumerable<MediaCard>>> fetchFunc)
     {
         var accessToken = await _settings.GetValueAsync("trakt_access_token");

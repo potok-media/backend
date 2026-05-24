@@ -151,4 +151,41 @@ public class LibraryOrchestrator : ILibraryOrchestrator
         var results = await Task.WhenAll(tasks);
         return results.Where(r => r != null)!;
     }
+
+    public async Task<UserProfileResponse> GetUserProfileAsync(string accessToken)
+    {
+        var profileTask = _traktClient.GetUserProfileAsync(accessToken);
+        var statsTask = _traktClient.GetUserStatsAsync(accessToken);
+
+        await Task.WhenAll(profileTask, statsTask);
+
+        var profile = await profileTask;
+        var stats = await statsTask;
+
+        if (profile == null)
+        {
+            throw new Exception("Failed to retrieve Trakt profile");
+        }
+
+        var username = profile.Username;
+        var name = profile.Name;
+        var isVip = profile.Vip || profile.VipEp;
+        var avatarUrl = profile.Images?.Avatar?.Full;
+
+        var moviesWatched = stats?.Movies?.Watched ?? 0;
+        var episodesWatched = stats?.Episodes?.Watched ?? 0;
+        var totalWatchMinutes = (stats?.Movies?.Minutes ?? 0) + (stats?.Episodes?.Minutes ?? 0);
+        var ratingsCount = stats?.Ratings?.Total ?? 0;
+
+        return new UserProfileResponse(
+            Username: username,
+            Name: name,
+            IsVip: isVip,
+            AvatarUrl: avatarUrl,
+            MoviesWatched: moviesWatched,
+            EpisodesWatched: episodesWatched,
+            TotalWatchMinutes: totalWatchMinutes,
+            RatingsCount: ratingsCount
+        );
+    }
 }

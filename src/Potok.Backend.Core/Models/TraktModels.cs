@@ -89,3 +89,52 @@ public record TraktShowProgress(
     [property: JsonPropertyName("next_episode")] TraktEpisode? NextEpisode,
     [property: JsonPropertyName("last_episode")] TraktEpisode? LastEpisode
 );
+
+public record TraktUserAvatar(
+    [property: JsonPropertyName("full")] string? Full
+);
+
+public record TraktUserImages(
+    [property: JsonPropertyName("avatar")] TraktUserAvatar? Avatar
+);
+
+public record TraktUserProfile(
+    [property: JsonPropertyName("username")] string Username,
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("vip")] bool Vip,
+    [property: JsonPropertyName("vip_ep")] bool VipEp,
+    [property: JsonPropertyName("images")] TraktUserImages? Images
+);
+
+public record TraktMovieStats(
+    [property: JsonPropertyName("watched")] int Watched,
+    [property: JsonPropertyName("plays")] int Plays,
+    [property: JsonPropertyName("minutes")] int Minutes
+);
+
+public record TraktEpisodeStats(
+    [property: JsonPropertyName("watched")] int Watched,
+    [property: JsonPropertyName("plays")] int Plays,
+    [property: JsonPropertyName("minutes")] int Minutes
+);
+
+public record TraktRatingStats(
+    [property: JsonPropertyName("total")] int Total
+);
+
+public record TraktUserStats(
+    [property: JsonPropertyName("movies")] TraktMovieStats? Movies,
+    [property: JsonPropertyName("episodes")] TraktEpisodeStats? Episodes,
+    [property: JsonPropertyName("ratings")] TraktRatingStats? Ratings
+);
+
+public record UserProfileResponse(
+    string Username,
+    string? Name,
+    bool IsVip,
+    string? AvatarUrl,
+    int MoviesWatched,
+    int EpisodesWatched,
+    int TotalWatchMinutes,
+    int RatingsCount
+);

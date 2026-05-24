@@ -202,6 +202,16 @@ public class TraktClient
         return await SendRequestAsync<TraktShowProgress>(HttpMethod.Get, $"shows/{slug}/progress/watched", accessToken);
     }
 
+    public async Task<TraktUserProfile?> GetUserProfileAsync(string accessToken)
+    {
+        return await SendRequestAsync<TraktUserProfile>(HttpMethod.Get, "users/me?extended=full", accessToken);
+    }
+
+    public async Task<TraktUserStats?> GetUserStatsAsync(string accessToken)
+    {
+        return await SendRequestAsync<TraktUserStats>(HttpMethod.Get, "users/me/stats", accessToken);
+    }
+
     private async Task<T?> SendRequestAsync<T>(HttpMethod method, string path, string accessToken)
     {
         try

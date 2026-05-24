@@ -9,4 +9,5 @@ public interface ILibraryOrchestrator
     Task<IEnumerable<MediaCard>> GetHistoryAsync(string accessToken, string baseUrl);
     Task<IEnumerable<MediaCard>> GetCalendarAsync(string accessToken, string baseUrl);
     Task<IEnumerable<MediaCard>> GetUpNextAsync(string accessToken, string baseUrl);
+    Task<UserProfileResponse> GetUserProfileAsync(string accessToken);
 }
