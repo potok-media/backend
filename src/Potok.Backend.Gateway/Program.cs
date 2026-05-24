@@ -1,6 +1,7 @@
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Infrastructure.Configuration;
 using Serilog;
+using Serilog.Events;
 using Serilog.Sinks.SystemConsole.Themes;
 
 var cleanTheme = new AnsiConsoleTheme(new Dictionary<ConsoleThemeStyle, string>
@@ -35,6 +36,15 @@ var cleanTheme = new AnsiConsoleTheme(new Dictionary<ConsoleThemeStyle, string>
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+    .MinimumLevel.Override("System", LogEventLevel.Warning)
+    .Filter.ByExcluding(logEvent => 
+        logEvent.Properties.TryGetValue("RequestPath", out var path) && 
+        path.ToString().Contains("health") &&
+        logEvent.Properties.TryGetValue("StatusCode", out var status) &&
+        status is ScalarValue scalar && 
+        scalar.Value is int code && 
+        code < 500)
     .Enrich.FromLogContext()
     .WriteTo.Console(
         theme: cleanTheme,

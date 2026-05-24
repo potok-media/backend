@@ -165,7 +165,15 @@ func main() {
 
 	// 4. Setup HTTP Router
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if req.URL.Path == "/health" {
+				next.ServeHTTP(w, req)
+				return
+			}
+			middleware.Logger(next).ServeHTTP(w, req)
+		})
+	})
 	r.Use(middleware.Recoverer)
 	r.Use(CORSMiddleware)
 
