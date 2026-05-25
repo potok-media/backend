@@ -22,6 +22,11 @@ on:
           - minor
           - major
         default: 'patch'
+      is_beta:
+        description: 'Выпустить как бета-версию (pre-release)'
+        required: true
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -61,24 +66,63 @@ jobs:
             echo "1.0.0" > VERSION
           fi
           CURRENT_VERSION=$(cat VERSION)
+          IS_BETA="${{ github.event.inputs.is_beta }}"
+          BUMP="${{ env.BUMP }}"
           
-          IFS='.' read -r -a parts <<< "$CURRENT_VERSION"
+          if [[ "$CURRENT_VERSION" == *"-beta."* ]]; then
+            BASE="${CURRENT_VERSION%-beta.*}"
+            BETA_NUM="${CURRENT_VERSION##*-beta.}"
+            HAS_BETA=true
+          else
+            BASE="$CURRENT_VERSION"
+            BETA_NUM=0
+            HAS_BETA=false
+          fi
+          
+          IFS='.' read -r -a parts <<< "$BASE"
           MAJOR="${parts[0]:-1}"
           MINOR="${parts[1]:-0}"
           PATCH="${parts[2]:-0}"
           
-          if [ "${{ env.BUMP }}" = "major" ]; then
-            MAJOR=$((MAJOR + 1))
-            MINOR=0
-            PATCH=0
-          elif [ "${{ env.BUMP }}" = "minor" ]; then
-            MINOR=$((MINOR + 1))
-            PATCH=0
+          if [ "$IS_BETA" = "true" ]; then
+            if [ "$HAS_BETA" = "true" ]; then
+              NEW_BETA_NUM=$((BETA_NUM + 1))
+              NEW_VERSION="$BASE-beta.$NEW_BETA_NUM"
+            else
+              if [ "$BUMP" = "major" ]; then
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+              elif [ "$BUMP" = "minor" ]; then
+                MINOR=$((MINOR + 1))
+                PATCH=0
+              else
+                PATCH=$((PATCH + 1))
+              fi
+              NEW_VERSION="$MAJOR.$MINOR.$PATCH-beta.1"
+            fi
+            echo "DOCKER_TAG_SECONDARY=beta" >> $GITHUB_ENV
+            echo "PRERELEASE=true" >> $GITHUB_ENV
           else
-            PATCH=$((PATCH + 1))
+            if [ "$HAS_BETA" = "true" ]; then
+              NEW_VERSION="$BASE"
+            else
+              if [ "$BUMP" = "major" ]; then
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+              elif [ "$BUMP" = "minor" ]; then
+                MINOR=$((MINOR + 1))
+                PATCH=0
+              else
+                PATCH=$((PATCH + 1))
+              fi
+              NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+            fi
+            echo "DOCKER_TAG_SECONDARY=latest" >> $GITHUB_ENV
+            echo "PRERELEASE=false" >> $GITHUB_ENV
           fi
           
-          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
           echo "$NEW_VERSION" > VERSION
           echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
           
@@ -121,7 +165,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-torrentgo
           tags: |
-            type=raw,value=latest
+            type=raw,value=${{ env.DOCKER_TAG_SECONDARY }}
             type=raw,value=${{ env.new_version }}
 
       - name: Build and Push TorrentGo
@@ -144,7 +188,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-gateway
           tags: |
-            type=raw,value=latest
+            type=raw,value=${{ env.DOCKER_TAG_SECONDARY }}
             type=raw,value=${{ env.new_version }}
 
       - name: Build and Push Gateway
@@ -167,7 +211,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-searchengine
           tags: |
-            type=raw,value=latest
+            type=raw,value=${{ env.DOCKER_TAG_SECONDARY }}
             type=raw,value=${{ env.new_version }}
 
       - name: Build and Push SearchEngine
@@ -189,3 +233,4 @@ jobs:
           tag_name: v${{ env.new_version }}
           name: Backend Release v${{ env.new_version }}
           generate_release_notes: true
+          prerelease: ${{ env.PRERELEASE }}

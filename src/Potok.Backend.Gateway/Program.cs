@@ -1,5 +1,6 @@
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Infrastructure.Configuration;
+using Potok.Backend.Infrastructure.Migrations.Configurations;
 using Serilog;
 using Serilog.Events;
 using Serilog.Sinks.SystemConsole.Themes;
@@ -117,6 +118,7 @@ app.Use(async (context, next) =>
 });
 
 app.UseResponseCaching();
+app.UseMiddleware<Potok.Backend.Infrastructure.Middlewares.UserContextMiddleware>();
 app.UseAuthorization();
 
 // Ensure DB is created on startup
@@ -125,12 +127,11 @@ using (var scope = app.Services.CreateScope())
     var settingsRepo = scope.ServiceProvider.GetRequiredService<ISettingsRepository>();
     await settingsRepo.EnsureDatabaseAsync();
     
-    var infuseRepo = scope.ServiceProvider.GetRequiredService<IInfuseRepository>();
-    await infuseRepo.EnsureDatabaseAsync();
-    
     var torrentRepo = scope.ServiceProvider.GetRequiredService<ITorrentRepository>();
     await torrentRepo.EnsureDatabaseAsync();
 }
+
+app.Services.RunGatewayMigrations();
 
 app.MapGet("/health", () => Results.Ok());
 app.MapControllers();

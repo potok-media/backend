@@ -7,7 +7,7 @@ namespace Potok.Backend.Infrastructure.Persistence.Repositories;
 
 public class SettingsRepository : ISettingsRepository
 {
-    private const string Schema = DbSchema.Name;
+    private const string Schema = DbSchema.Gateway;
     private readonly string _connectionString;
 
     public SettingsRepository(string connectionString)

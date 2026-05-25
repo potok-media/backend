@@ -49,11 +49,10 @@ services:
       - ConnectionStrings__DefaultConnection=${DATABASE_URL}
       - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY}
       - Gateway__DefaultSearchEngineUrl=${GATEWAY_SEARCH_ENGINE_URL:-http://potok-searchengine:6000}
-      - Gateway__DefaultTorrServerUrl=${GATEWAY_TORRSERVER_URL:-http://potok-torrentgo:5282}
     depends_on:
       - potok-searchengine
-      - potok-torrentgo
 
 volumes:
   torrent-cache:
     name: potok_torrent_cache
+

@@ -56,8 +56,10 @@ public static class ServicesConfiguration
             .AddScoped<IHomeService, HomeService>()
             .AddScoped<IMediaOrchestrator, MediaOrchestrator>()
             .AddScoped<ILibraryOrchestrator, LibraryOrchestrator>()
-            .AddScoped<IInfuseRepository, InfuseRepository>()
             .AddSingleton<ISettingsRepository, SettingsRepository>()
+            .AddScoped<IUserRepository, UserRepository>()
+            .AddScoped<IUserHistoryRepository, UserHistoryRepository>()
+            .AddScoped<IUserListsRepository, UserListsRepository>()
             .AddTransient<TraktApiHandler>();
 
         services.AddSingleton<ICacheService, CacheService>();
@@ -151,12 +153,6 @@ public static class ServicesConfiguration
             });
         
         services.AddHttpClient<ISearchEngineClient, SearchEngineClient>().AddStandardResilienceHandler();
-        services.AddHttpClient<ITorrServerClient, TorrServerClient>().AddStandardResilienceHandler(options =>
-        {
-            options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(60);
-            options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(60);
-            options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(120);
-        });
         services.AddHttpClient<TmdbClient>(client => { client.BaseAddress = new Uri("https://api.themoviedb.org/3/"); }).AddStandardResilienceHandler();
         services.AddHttpClient<TraktClient>().AddHttpMessageHandler<TraktApiHandler>().AddStandardResilienceHandler();
         services.AddHttpClient("TraktProxy").AddHttpMessageHandler<TraktApiHandler>().AddStandardResilienceHandler();
@@ -165,7 +161,6 @@ public static class ServicesConfiguration
                                ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
 
         services.AddSingleton(connectionString);
-        services.AddSearchEngineMigrations(connectionString);
         
         return services;
     }
@@ -184,6 +179,13 @@ public static class ServicesConfiguration
 
         services.AddHttpClient();
 
+        services.AddScoped<IPasswordHasher, Potok.Backend.Infrastructure.Gateway.Security.PasswordHasher>();
+        services.AddScoped<IJwtTokenService, Potok.Backend.Infrastructure.Gateway.Security.JwtTokenService>();
+
+        var connectionString = configuration.GetConnectionString("DefaultConnection")
+                               ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+        services.AddGatewayMigrations(connectionString);
+
         return services;
     }
 
@@ -191,6 +193,10 @@ public static class ServicesConfiguration
     {
         // Dapper: сопоставление snake_case колонок с PascalCase свойствами
         DefaultTypeMap.MatchNamesWithUnderscores = true;
+
+        var connectionString = configuration.GetConnectionString("DefaultConnection")
+                               ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+        services.AddSearchEngineMigrations(connectionString);
 
         services.Configure<Config>(configuration);
 
@@ -226,7 +232,6 @@ public static class ServicesConfiguration
         services.AddRouting(options => options.LowercaseUrls = true);
         
         // крон сервисы
-        services.AddHostedService<InfuseHealthCheckService>();
         services.AddHostedService<TorrentMediaProbeHostedService>();
         services.AddHostedService<RuTrackerPopularHostedService>();
         services.AddHostedService<RefreshHostedService>();

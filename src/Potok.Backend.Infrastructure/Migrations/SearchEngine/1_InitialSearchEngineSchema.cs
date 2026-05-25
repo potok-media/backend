@@ -1,18 +1,18 @@
 using FluentMigrator;
 using Potok.Backend.Infrastructure.Migrations.Configurations;
 
-namespace Potok.SearchEngine.Infrastructure.Migrations;
+namespace Potok.Backend.Infrastructure.Migrations.SearchEngine;
 
 [Migration(1)]
-public class InitialSchema : Migration
+public class InitialSearchEngineSchema : Migration
 {
     public override void Up()
     {
-        var schema = DbSchema.Name;
+        var schema = DbSchema.SearchEngineRaw;
         Execute.Sql("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
         Execute.Sql("CREATE EXTENSION IF NOT EXISTS pg_trgm;");
         Execute.Sql("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";");
-        Execute.Sql($"CREATE SCHEMA IF NOT EXISTS {schema};");
+        Execute.Sql($"CREATE SCHEMA IF NOT EXISTS \"{schema}\";");
 
         // --- Torrents Table ---
         Create.Table("torrents").InSchema(schema)
@@ -33,7 +33,7 @@ public class InitialSchema : Migration
         Create.Index("ix_torrents_tmdb_id").OnTable("torrents").InSchema(schema).OnColumn("tmdb_id");
         Create.Index("ix_torrents_info_hash").OnTable("torrents").InSchema(schema).OnColumn("info_hash");
         Create.Index("ix_torrents_seeders").OnTable("torrents").InSchema(schema).OnColumn("seeders").Descending();
-        Execute.Sql($"CREATE INDEX IF NOT EXISTS ix_torrents_title_trgm ON {schema}.torrents USING gin (title gin_trgm_ops);");
+        Execute.Sql($"CREATE INDEX IF NOT EXISTS ix_torrents_title_trgm ON \"{schema}\".torrents USING gin (title gin_trgm_ops);");
 
         // --- Queries Table (for background refresh) ---
         Create.Table("queries").InSchema(schema)
@@ -66,10 +66,10 @@ public class InitialSchema : Migration
 
     public override void Down()
     {
-        var schema = DbSchema.Name;
+        var schema = DbSchema.SearchEngineRaw;
         Delete.Table("subscriptions").InSchema(schema);
         Delete.Table("queries").InSchema(schema);
         Delete.Table("torrents").InSchema(schema);
-        Execute.Sql($"DROP SCHEMA IF EXISTS {schema} CASCADE;");
+        Execute.Sql($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE;");
     }
 }
