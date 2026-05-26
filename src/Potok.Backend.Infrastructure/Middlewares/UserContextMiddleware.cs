@@ -17,35 +17,64 @@ public class UserContextMiddleware
         _next = next;
     }
 
-    public async Task InvokeAsync(HttpContext context, IJwtTokenService jwtTokenService, IOptions<GatewayOptions> options)
+    public async Task InvokeAsync(HttpContext context, IJwtTokenService jwtTokenService, IUserRepository userRepository, IOptions<GatewayOptions> options)
     {
         var gatewayOptions = options.Value;
+        var path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
 
-        if (!gatewayOptions.MultiUserMode)
+        if (path.StartsWith("/api/handshake") || 
+            path.StartsWith("/api/auth/login") || 
+            path.StartsWith("/api/health") || 
+            path.StartsWith("/api/events") || 
+            (path.StartsWith("/api/auth/register") && gatewayOptions.MultiUserMode))
         {
-            // --- Personal Mode Bypass ---
-            // Automatically inject the default-user identity on every request
-            var defaultUserId = "00000000-0000-0000-0000-000000000000";
-            var identity = new ClaimsIdentity(new[]
-            {
-                new Claim(ClaimTypes.NameIdentifier, defaultUserId),
-                new Claim(ClaimTypes.Name, "default-user")
-            }, "BypassAuth");
+            await _next(context);
+            return;
+        }
 
-            context.User = new ClaimsPrincipal(identity);
+        var authHeader = context.Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal? authenticatedUser = null;
+
+        if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        {
+            var token = authHeader.Substring("Bearer ".Length).Trim();
+            var validatedUser = jwtTokenService.ValidateToken(token);
+            if (validatedUser != null)
+            {
+                var userIdStr = validatedUser.FindFirstValue(ClaimTypes.NameIdentifier);
+                if (Guid.TryParse(userIdStr, out var userId))
+                {
+                    var existingUser = await userRepository.GetByIdAsync(userId);
+                    if (existingUser != null)
+                    {
+                        authenticatedUser = validatedUser;
+                        context.User = authenticatedUser;
+                    }
+                }
+            }
+        }
+
+        if (gatewayOptions.AuthRequired)
+        {
+            if (authenticatedUser == null)
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                context.Response.ContentType = "application/json";
+                await context.Response.WriteAsJsonAsync(new { error = "UNAUTHORIZED", message = "Доступ к серверу ограничен." });
+                return;
+            }
         }
         else
         {
-            // --- Shared Mode JWT Validation ---
-            var authHeader = context.Request.Headers["Authorization"].ToString();
-            if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            if (context.User.Identity?.IsAuthenticated != true)
             {
-                var token = authHeader.Substring("Bearer ".Length).Trim();
-                var principal = jwtTokenService.ValidateToken(token);
-                if (principal != null)
+                var defaultUserId = Guid.NewGuid().ToString();
+                var identity = new ClaimsIdentity(new[]
                 {
-                    context.User = principal;
-                }
+                    new Claim(ClaimTypes.NameIdentifier, defaultUserId),
+                    new Claim(ClaimTypes.Name, "default-user")
+                }, "BypassAuth");
+                context.User = new ClaimsPrincipal(identity);
             }
         }
 

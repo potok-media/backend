@@ -121,7 +121,6 @@ app.UseResponseCaching();
 app.UseMiddleware<Potok.Backend.Infrastructure.Middlewares.UserContextMiddleware>();
 app.UseAuthorization();
 
-// Ensure DB is created on startup
 using (var scope = app.Services.CreateScope())
 {
     var settingsRepo = scope.ServiceProvider.GetRequiredService<ISettingsRepository>();
@@ -132,6 +131,27 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Services.RunGatewayMigrations();
+
+using (var scope = app.Services.CreateScope())
+{
+    var gatewayOptions = scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<GatewayOptions>>().Value;
+    var adminPassword = !string.IsNullOrEmpty(gatewayOptions.AdminPassword) ? gatewayOptions.AdminPassword : "admin";
+    var userRepo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+    var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
+    var existingAdmin = await userRepo.GetByUsernameAsync(gatewayOptions.AdminUsername);
+    if (existingAdmin == null)
+    {
+        var adminUser = new Potok.Backend.Core.Entities.User
+        {
+            Id = Guid.NewGuid(),
+            Username = gatewayOptions.AdminUsername,
+            PasswordHash = hasher.HashPassword(adminPassword),
+            SyncStrategy = "server",
+            CreatedAt = DateTime.UtcNow
+        };
+        await userRepo.CreateAsync(adminUser);
+    }
+}
 
 app.MapGet("/health", () => Results.Ok());
 app.MapControllers();

@@ -69,7 +69,13 @@ public class EventsController : ControllerBase
         finally
         {
             _broadcaster.Unsubscribe(clientId);
-            await enumerator.DisposeAsync();
+            try
+            {
+                await enumerator.DisposeAsync();
+            }
+            catch (NotSupportedException)
+            {
+            }
         }
     }
 }

@@ -3,8 +3,10 @@ using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Entities;
 using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Infrastructure.Configuration;
 
 namespace Potok.Backend.Gateway.Controllers;
 
@@ -15,20 +17,28 @@ public class AuthController : ControllerBase
     private readonly IUserRepository _userRepository;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IJwtTokenService _jwtTokenService;
+    private readonly IOptions<GatewayOptions> _options;
 
     public AuthController(
         IUserRepository userRepository,
         IPasswordHasher passwordHasher,
-        IJwtTokenService jwtTokenService)
+        IJwtTokenService jwtTokenService,
+        IOptions<GatewayOptions> options)
     {
         _userRepository = userRepository;
         _passwordHasher = passwordHasher;
         _jwtTokenService = jwtTokenService;
+        _options = options;
     }
 
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request)
     {
+        if (!_options.Value.MultiUserMode)
+        {
+            return StatusCode(403, new { error = "REGISTRATION_DISABLED", message = "Registration is disabled on this server." });
+        }
+
         if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password))
         {
             return BadRequest(new { error = "INVALID_INPUT", message = "Username and password cannot be empty" });
@@ -45,7 +55,7 @@ public class AuthController : ControllerBase
             Id = Guid.NewGuid(),
             Username = request.Username.Trim(),
             PasswordHash = _passwordHasher.HashPassword(request.Password),
-            SyncStrategy = "database",
+            SyncStrategy = "server",
             CreatedAt = DateTime.UtcNow
         };
 
@@ -126,9 +136,9 @@ public class AuthController : ControllerBase
             return Unauthorized(new { error = "UNAUTHORIZED" });
         }
 
-        if (request.Strategy != "trakt" && request.Strategy != "database")
+        if (request.Strategy != "trakt" && request.Strategy != "database" && request.Strategy != "server")
         {
-            return BadRequest(new { error = "INVALID_STRATEGY", message = "Strategy must be 'trakt' or 'database'" });
+            return BadRequest(new { error = "INVALID_STRATEGY", message = "Strategy must be 'trakt' or 'database' or 'server'" });
         }
 
         await _userRepository.UpdateSyncStrategyAsync(userId, request.Strategy);

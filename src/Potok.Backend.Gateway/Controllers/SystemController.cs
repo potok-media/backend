@@ -19,10 +19,8 @@ public class SystemController : ControllerBase
     {
         return Ok(new
         {
-            name = "Potok Gateway",
-            version = "0.2.0",
-            platform = "dotnet-10",
-            multiUserMode = _options.Value.MultiUserMode
+            multiUserMode = _options.Value.MultiUserMode,
+            authRequired = _options.Value.AuthRequired
         });
     }
 
