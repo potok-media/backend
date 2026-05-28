@@ -1,6 +1,9 @@
+using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using Potok.Backend.Core.Entities;
+using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Infrastructure.Configuration;
 using ILogger = Serilog.ILogger;
 
@@ -11,13 +14,19 @@ public class TraktProxyController : ControllerBase
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly GatewayOptions _options;
+    private readonly IUserRepository _userRepository;
     private readonly ILogger _logger;
     private const string TraktApiBase = "https://api.trakt.tv";
 
-    public TraktProxyController(IHttpClientFactory httpClientFactory, IOptions<GatewayOptions> options, ILogger logger)
+    public TraktProxyController(
+        IHttpClientFactory httpClientFactory,
+        IOptions<GatewayOptions> options,
+        IUserRepository userRepository,
+        ILogger logger)
     {
         _httpClientFactory = httpClientFactory;
         _options = options.Value;
+        _userRepository = userRepository;
         _logger = logger;
     }
 
@@ -56,12 +65,59 @@ public class TraktProxyController : ControllerBase
         }
 
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        // Save to DB if user is authenticated!
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!string.IsNullOrEmpty(userIdStr) && Guid.TryParse(userIdStr, out var userId))
+        {
+            try
+            {
+                var accessToken = json.GetProperty("access_token").GetString() ?? string.Empty;
+                var refreshToken = json.TryGetProperty("refresh_token", out var rtProp) ? rtProp.GetString() : null;
+                DateTime? expiresAt = null;
+                if (json.TryGetProperty("expires_in", out var expProp) && expProp.ValueKind == JsonValueKind.Number)
+                {
+                    expiresAt = DateTime.UtcNow.AddSeconds(expProp.GetInt64());
+                }
+
+                if (!string.IsNullOrEmpty(accessToken))
+                {
+                    await _userRepository.SaveTraktTokenAsync(new UserTraktToken
+                    {
+                        UserId = userId,
+                        AccessToken = accessToken,
+                        RefreshToken = refreshToken,
+                        ExpiresAt = expiresAt
+                    });
+                    _logger.Information("Saved Trakt token for user {UserId}", userId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Failed to save Trakt token for user {UserId} to database", userId);
+            }
+        }
+
         return Ok(json);
     }
 
     [HttpPost("api/trakt/logout")]
     public async Task<IActionResult> Logout()
     {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!string.IsNullOrEmpty(userIdStr) && Guid.TryParse(userIdStr, out var userId))
+        {
+            try
+            {
+                await _userRepository.DeleteTraktTokenAsync(userId);
+                _logger.Information("Deleted Trakt token for user {UserId} from database", userId);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Failed to delete Trakt token for user {UserId} from database", userId);
+            }
+        }
+
         return Ok(new { success = true });
     }
 

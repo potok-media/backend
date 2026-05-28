@@ -70,7 +70,8 @@ public class AuthController : ControllerBase
             {
                 id = user.Id,
                 username = user.Username,
-                syncStrategy = user.SyncStrategy
+                syncStrategy = user.SyncStrategy,
+                traktAccessToken = (string?)null
             }
         });
     }
@@ -90,6 +91,7 @@ public class AuthController : ControllerBase
         }
 
         var token = _jwtTokenService.GenerateToken(user.Id, user.Username);
+        var traktToken = await _userRepository.GetTraktTokenAsync(user.Id);
 
         return Ok(new
         {
@@ -98,7 +100,8 @@ public class AuthController : ControllerBase
             {
                 id = user.Id,
                 username = user.Username,
-                syncStrategy = user.SyncStrategy
+                syncStrategy = user.SyncStrategy,
+                traktAccessToken = traktToken?.AccessToken
             }
         });
     }
@@ -118,11 +121,14 @@ public class AuthController : ControllerBase
             return NotFound(new { error = "USER_NOT_FOUND" });
         }
 
+        var traktToken = await _userRepository.GetTraktTokenAsync(userId);
+
         return Ok(new
         {
             id = user.Id,
             username = user.Username,
-            syncStrategy = user.SyncStrategy
+            syncStrategy = user.SyncStrategy,
+            traktAccessToken = traktToken?.AccessToken
         });
     }
 

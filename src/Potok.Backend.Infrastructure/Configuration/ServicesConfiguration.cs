@@ -151,9 +151,22 @@ public static class ServicesConfiguration
                 AllowAutoRedirect = false
             });
         
-        services.AddHttpClient<TmdbClient>(client => { client.BaseAddress = new Uri("https://api.themoviedb.org/3/"); }).AddStandardResilienceHandler();
-        services.AddHttpClient<TraktClient>().AddHttpMessageHandler<TraktApiHandler>().AddStandardResilienceHandler();
-        services.AddHttpClient("TraktProxy").AddHttpMessageHandler<TraktApiHandler>().AddStandardResilienceHandler();
+        services.AddHttpClient<TmdbClient>(client => { client.BaseAddress = new Uri("https://api.themoviedb.org/3/"); })
+            .AddStandardResilienceHandler(options => {
+                options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(10);
+            });
+            
+        services.AddHttpClient<TraktClient>()
+            .AddHttpMessageHandler<TraktApiHandler>()
+            .AddStandardResilienceHandler(options => {
+                options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(10);
+            });
+            
+        services.AddHttpClient("TraktProxy")
+            .AddHttpMessageHandler<TraktApiHandler>()
+            .AddStandardResilienceHandler(options => {
+                options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(10);
+            });
 
         var connectionString = configuration.GetConnectionString("DefaultConnection")
                                ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
