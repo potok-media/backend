@@ -25,7 +25,10 @@ public class UserContextMiddleware
         if (path.StartsWith("/api/handshake") || 
             path.StartsWith("/api/auth/login") || 
             path.StartsWith("/api/health") || 
+            path.StartsWith("/health") || 
             path.StartsWith("/api/events") || 
+            path.StartsWith("/media/tmdb") || 
+            path.StartsWith("/api/media") || 
             (path.StartsWith("/api/auth/register") && gatewayOptions.MultiUserMode))
         {
             await _next(context);
@@ -41,7 +44,7 @@ public class UserContextMiddleware
             var validatedUser = jwtTokenService.ValidateToken(token);
             if (validatedUser != null)
             {
-                var userIdStr = validatedUser.FindFirstValue(ClaimTypes.NameIdentifier);
+                var userIdStr = validatedUser.FindFirstValue(ClaimTypes.NameIdentifier) ?? validatedUser.FindFirstValue("sub");
                 if (Guid.TryParse(userIdStr, out var userId))
                 {
                     var existingUser = await userRepository.GetByIdAsync(userId);

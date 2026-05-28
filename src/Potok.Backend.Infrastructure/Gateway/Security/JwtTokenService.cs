@@ -44,7 +44,7 @@ public class JwtTokenService : IJwtTokenService
         var key = Encoding.ASCII.GetBytes(_options.JwtSecret);
         try
         {
-            tokenHandler.ValidateToken(token, new TokenValidationParameters
+            var principal = tokenHandler.ValidateToken(token, new TokenValidationParameters
             {
                 ValidateIssuerSigningKey = true,
                 IssuerSigningKey = new SymmetricSecurityKey(key),
@@ -53,8 +53,7 @@ public class JwtTokenService : IJwtTokenService
                 ClockSkew = TimeSpan.Zero
             }, out SecurityToken validatedToken);
 
-            var jwtToken = (JwtSecurityToken)validatedToken;
-            return new ClaimsPrincipal(new ClaimsIdentity(jwtToken.Claims, "jwt"));
+            return principal;
         }
         catch
         {

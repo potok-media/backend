@@ -56,7 +56,6 @@ public static class ServicesConfiguration
             .AddScoped<IHomeService, HomeService>()
             .AddScoped<IMediaOrchestrator, MediaOrchestrator>()
             .AddScoped<ILibraryOrchestrator, LibraryOrchestrator>()
-            .AddSingleton<ISettingsRepository, SettingsRepository>()
             .AddScoped<IUserRepository, UserRepository>()
             .AddScoped<IUserHistoryRepository, UserHistoryRepository>()
             .AddScoped<IUserListsRepository, UserListsRepository>()
@@ -152,7 +151,6 @@ public static class ServicesConfiguration
                 AllowAutoRedirect = false
             });
         
-        services.AddHttpClient<ISearchEngineClient, SearchEngineClient>().AddStandardResilienceHandler();
         services.AddHttpClient<TmdbClient>(client => { client.BaseAddress = new Uri("https://api.themoviedb.org/3/"); }).AddStandardResilienceHandler();
         services.AddHttpClient<TraktClient>().AddHttpMessageHandler<TraktApiHandler>().AddStandardResilienceHandler();
         services.AddHttpClient("TraktProxy").AddHttpMessageHandler<TraktApiHandler>().AddStandardResilienceHandler();
@@ -191,7 +189,6 @@ public static class ServicesConfiguration
 
     public static IServiceCollection AddSearchEngineInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        // Dapper: сопоставление snake_case колонок с PascalCase свойствами
         DefaultTypeMap.MatchNamesWithUnderscores = true;
 
         var connectionString = configuration.GetConnectionString("DefaultConnection")
@@ -231,7 +228,6 @@ public static class ServicesConfiguration
 
         services.AddRouting(options => options.LowercaseUrls = true);
         
-        // крон сервисы
         services.AddHostedService<TorrentMediaProbeHostedService>();
         services.AddHostedService<RuTrackerPopularHostedService>();
         services.AddHostedService<RefreshHostedService>();

@@ -9,25 +9,15 @@ namespace Potok.Backend.Gateway.Controllers;
 [Route("api/torrents")]
 public class TorrentsController : ControllerBase
 {
-    private readonly ISearchEngineClient _searchEngineClient;
     private readonly ITorrentRepository _torrentRepository;
     private readonly IEventBroadcaster _eventBroadcaster;
 
     public TorrentsController(
-        ISearchEngineClient searchEngineClient, 
         ITorrentRepository torrentRepository,
         IEventBroadcaster eventBroadcaster)
     {
-        _searchEngineClient = searchEngineClient;
         _torrentRepository = torrentRepository;
         _eventBroadcaster = eventBroadcaster;
-    }
-
-    [HttpPost("search")]
-    public async Task<IActionResult> SearchTorrents([FromBody] TorrentSearchRequest request)
-    {
-        var result = await _searchEngineClient.SearchAsync(request);
-        return Ok(result);
     }
 
     [HttpGet("overrides/{hash}")]
@@ -36,6 +26,23 @@ public class TorrentsController : ControllerBase
         if (string.IsNullOrEmpty(hash)) return BadRequest("Hash is required");
         var result = await _torrentRepository.GetOverrideAsync(hash.ToLower());
         if (result == null) return NotFound();
+        return Ok(result);
+    }
+
+    [HttpPost("overrides/batch")]
+    public async Task<IActionResult> GetBatchOverrides([FromBody] List<string> hashes)
+    {
+        if (hashes == null || !hashes.Any()) return Ok(new Dictionary<string, object>());
+        var result = new Dictionary<string, object>();
+        foreach (var hash in hashes)
+        {
+            if (string.IsNullOrEmpty(hash)) continue;
+            var ov = await _torrentRepository.GetOverrideAsync(hash.ToLower());
+            if (ov != null)
+            {
+                result[hash.ToLower()] = ov;
+            }
+        }
         return Ok(result);
     }
 
@@ -55,4 +62,3 @@ public class TorrentsController : ControllerBase
         return Ok(new { success = true });
     }
 }
-

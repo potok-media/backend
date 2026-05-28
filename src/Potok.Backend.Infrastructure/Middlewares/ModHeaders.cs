@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Models.Options;
 
@@ -28,6 +28,12 @@ public partial class ModHeaders
             httpContext.Response.Headers.AccessControlAllowOrigin = referer.ToString();
         else
             httpContext.Response.Headers.AccessControlAllowOrigin = "*";
+
+        if (HttpMethods.IsOptions(httpContext.Request.Method))
+        {
+            httpContext.Response.StatusCode = StatusCodes.Status200OK;
+            return Task.CompletedTask;
+        }
 
         return _next(httpContext);
     }

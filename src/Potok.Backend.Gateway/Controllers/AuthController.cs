@@ -55,7 +55,7 @@ public class AuthController : ControllerBase
             Id = Guid.NewGuid(),
             Username = request.Username.Trim(),
             PasswordHash = _passwordHasher.HashPassword(request.Password),
-            SyncStrategy = "server",
+            SyncStrategy = "none",
             CreatedAt = DateTime.UtcNow
         };
 
@@ -136,9 +136,9 @@ public class AuthController : ControllerBase
             return Unauthorized(new { error = "UNAUTHORIZED" });
         }
 
-        if (request.Strategy != "trakt" && request.Strategy != "database" && request.Strategy != "server")
+        if (request.Strategy != "trakt" && request.Strategy != "database" && request.Strategy != "server" && request.Strategy != "local" && request.Strategy != "none")
         {
-            return BadRequest(new { error = "INVALID_STRATEGY", message = "Strategy must be 'trakt' or 'database' or 'server'" });
+            return BadRequest(new { error = "INVALID_STRATEGY", message = "Strategy must be 'trakt', 'database', 'server', 'local', or 'none'" });
         }
 
         await _userRepository.UpdateSyncStrategyAsync(userId, request.Strategy);

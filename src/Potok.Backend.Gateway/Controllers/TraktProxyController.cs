@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Infrastructure.Configuration;
 using ILogger = Serilog.ILogger;
 
@@ -12,15 +11,13 @@ public class TraktProxyController : ControllerBase
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly GatewayOptions _options;
-    private readonly ISettingsRepository _settingsRepository;
     private readonly ILogger _logger;
     private const string TraktApiBase = "https://api.trakt.tv";
 
-    public TraktProxyController(IHttpClientFactory httpClientFactory, IOptions<GatewayOptions> options, ISettingsRepository settingsRepository, ILogger logger)
+    public TraktProxyController(IHttpClientFactory httpClientFactory, IOptions<GatewayOptions> options, ILogger logger)
     {
         _httpClientFactory = httpClientFactory;
         _options = options.Value;
-        _settingsRepository = settingsRepository;
         _logger = logger;
     }
 
@@ -59,24 +56,12 @@ public class TraktProxyController : ControllerBase
         }
 
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
-        if (json.TryGetProperty("access_token", out var tokenProp))
-        {
-            var token = tokenProp.GetString();
-            if (!string.IsNullOrEmpty(token))
-            {
-                _logger.Information("Saving Trakt access token to settings");
-                await _settingsRepository.SetValueAsync("trakt_access_token", token);
-            }
-        }
-
         return Ok(json);
     }
 
     [HttpPost("api/trakt/logout")]
     public async Task<IActionResult> Logout()
     {
-        _logger.Information("Clearing Trakt access token from settings");
-        await _settingsRepository.SetValueAsync("trakt_access_token", "");
         return Ok(new { success = true });
     }
 
@@ -89,8 +74,20 @@ public class TraktProxyController : ControllerBase
 
         var requestMessage = new HttpRequestMessage(new HttpMethod(Request.Method), url);
         
-        // Inject token from DB instead of client header
-        var accessToken = await _settingsRepository.GetValueAsync("trakt_access_token");
+        string? accessToken = null;
+        if (Request.Headers.TryGetValue("Trakt-Authorization", out var clientTraktAuth) && !string.IsNullOrEmpty(clientTraktAuth))
+        {
+            var headerVal = clientTraktAuth.ToString();
+            if (headerVal.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                accessToken = headerVal.Substring("Bearer ".Length).Trim();
+            }
+            else
+            {
+                accessToken = headerVal.Trim();
+            }
+        }
+
         if (!string.IsNullOrEmpty(accessToken))
         {
             requestMessage.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);

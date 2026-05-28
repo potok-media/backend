@@ -13,19 +13,28 @@ public class MediaController : ControllerBase
     private readonly IHomeService _homeService;
     private readonly IMediaOrchestrator _orchestrator;
     private readonly TmdbClient _tmdbClient;
-    private readonly ISettingsRepository _settings;
     private readonly ILogger _logger;
 
-    public MediaController(IHomeService homeService, IMediaOrchestrator orchestrator, TmdbClient tmdbClient, ISettingsRepository settings, ILogger logger)
+    public MediaController(IHomeService homeService, IMediaOrchestrator orchestrator, TmdbClient tmdbClient, ILogger logger)
     {
         _homeService = homeService;
         _orchestrator = orchestrator;
         _tmdbClient = tmdbClient;
-        _settings = settings;
         _logger = logger;
     }
 
     private string BaseUrl => $"{Request.Scheme}://{Request.Host}";
+
+    private string? GetTraktAccessToken()
+    {
+        var headerVal = Request.Headers["Trakt-Authorization"].ToString();
+        if (string.IsNullOrEmpty(headerVal)) return null;
+        if (headerVal.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        {
+            return headerVal.Substring("Bearer ".Length).Trim();
+        }
+        return headerVal.Trim();
+    }
 
     [HttpGet("home")]
     public async Task<IActionResult> GetHome(
@@ -44,7 +53,7 @@ public class MediaController : ControllerBase
         long id,
         [FromQuery] bool refresh = false)
     {
-        var accessToken = await _settings.GetValueAsync("trakt_access_token");
+        var accessToken = GetTraktAccessToken();
 
         _logger.Debug("Fetching media details for {MediaType}/{Id} (refresh={Refresh}, hasToken={HasToken})", mediaType, id, refresh, !string.IsNullOrEmpty(accessToken));
 
