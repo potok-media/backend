@@ -1,34 +1,25 @@
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Infrastructure.Configuration;
+using Potok.Backend.Infrastructure.Migrations.Configurations;
 using Serilog;
 using Serilog.Events;
 using Serilog.Sinks.SystemConsole.Themes;
 
 var cleanTheme = new AnsiConsoleTheme(new Dictionary<ConsoleThemeStyle, string>
 {
-    // основной текст
     [ConsoleThemeStyle.Text] = "\x1b[37m",
-
-    // второстепенное
     [ConsoleThemeStyle.SecondaryText] = "\x1b[90m",
     [ConsoleThemeStyle.TertiaryText] = "\x1b[90m",
-
-    // данные
-    [ConsoleThemeStyle.String] = "\x1b[32m", // мягкий зелёный
-    [ConsoleThemeStyle.Number] = "\x1b[35m", // фиолетовый
-    [ConsoleThemeStyle.Boolean] = "\x1b[36m", // бирюзовый
+    [ConsoleThemeStyle.String] = "\x1b[32m",
+    [ConsoleThemeStyle.Number] = "\x1b[35m",
+    [ConsoleThemeStyle.Boolean] = "\x1b[36m",
     [ConsoleThemeStyle.Scalar] = "\x1b[32m",
-
-    // уровни
     [ConsoleThemeStyle.LevelVerbose] = "\x1b[90m",
     [ConsoleThemeStyle.LevelDebug] = "\x1b[90m",
-
-    [ConsoleThemeStyle.LevelInformation] = "\x1b[36m", // спокойный cyan
-    [ConsoleThemeStyle.LevelWarning] = "\x1b[33m", // amber
-    [ConsoleThemeStyle.LevelError] = "\x1b[31m", // red
-    [ConsoleThemeStyle.LevelFatal] = "\x1b[31;1m", // яркий красный только для fatal
-
-    // прочее
+    [ConsoleThemeStyle.LevelInformation] = "\x1b[36m",
+    [ConsoleThemeStyle.LevelWarning] = "\x1b[33m",
+    [ConsoleThemeStyle.LevelError] = "\x1b[31m",
+    [ConsoleThemeStyle.LevelFatal] = "\x1b[31;1m",
     [ConsoleThemeStyle.Name] = "\x1b[37m",
     [ConsoleThemeStyle.Null] = "\x1b[90m",
     [ConsoleThemeStyle.Invalid] = "\x1b[33m"
@@ -62,7 +53,6 @@ if (!string.IsNullOrEmpty(port))
 builder.Logging.ClearProviders();
 builder.Host.UseSerilog(Log.Logger, dispose: true);
 
-// Add services to the container.
 builder.Services.AddSharedInfrastructure(builder.Configuration);
 builder.Services.AddGatewayInfrastructure(builder.Configuration);
 builder.Services.AddCors(options =>
@@ -95,8 +85,11 @@ app.UseSerilogRequestLogging(options =>
     };
 });
 app.UseCors("AllowAll");
+app.UseWebSockets(new WebSocketOptions
+{
+    KeepAliveInterval = TimeSpan.FromSeconds(15)
+});
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
@@ -104,11 +97,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// app.UseHttpsRedirection();
 app.Use(async (context, next) =>
 {
-    // For public media, we strip the Authorization header to ensure ResponseCaching can work.
-    // ASP.NET Core Response Caching doesn't cache requests with Authorization headers by default.
     if (context.Request.Path.StartsWithSegments("/media/tmdb"))
     {
         context.Request.Headers.Remove("Authorization");
@@ -117,19 +107,36 @@ app.Use(async (context, next) =>
 });
 
 app.UseResponseCaching();
+app.UseMiddleware<Potok.Backend.Infrastructure.Middlewares.UserContextMiddleware>();
 app.UseAuthorization();
 
-// Ensure DB is created on startup
 using (var scope = app.Services.CreateScope())
 {
-    var settingsRepo = scope.ServiceProvider.GetRequiredService<ISettingsRepository>();
-    await settingsRepo.EnsureDatabaseAsync();
-    
-    var infuseRepo = scope.ServiceProvider.GetRequiredService<IInfuseRepository>();
-    await infuseRepo.EnsureDatabaseAsync();
-    
     var torrentRepo = scope.ServiceProvider.GetRequiredService<ITorrentRepository>();
     await torrentRepo.EnsureDatabaseAsync();
+}
+
+app.Services.RunGatewayMigrations();
+
+using (var scope = app.Services.CreateScope())
+{
+    var gatewayOptions = scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<GatewayOptions>>().Value;
+    var adminPassword = !string.IsNullOrEmpty(gatewayOptions.AdminPassword) ? gatewayOptions.AdminPassword : "admin";
+    var userRepo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+    var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
+    var existingAdmin = await userRepo.GetByUsernameAsync(gatewayOptions.AdminUsername);
+    if (existingAdmin == null)
+    {
+        var adminUser = new Potok.Backend.Core.Entities.User
+        {
+            Id = Guid.NewGuid(),
+            Username = gatewayOptions.AdminUsername,
+            PasswordHash = hasher.HashPassword(adminPassword),
+            SyncStrategy = "none",
+            CreatedAt = DateTime.UtcNow
+        };
+        await userRepo.CreateAsync(adminUser);
+    }
 }
 
 app.MapGet("/health", () => Results.Ok());

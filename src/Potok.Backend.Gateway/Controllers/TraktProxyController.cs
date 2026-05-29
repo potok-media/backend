@@ -1,6 +1,8 @@
+using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using Potok.Backend.Core.Entities;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Infrastructure.Configuration;
 using ILogger = Serilog.ILogger;
@@ -12,15 +14,19 @@ public class TraktProxyController : ControllerBase
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly GatewayOptions _options;
-    private readonly ISettingsRepository _settingsRepository;
+    private readonly IUserRepository _userRepository;
     private readonly ILogger _logger;
     private const string TraktApiBase = "https://api.trakt.tv";
 
-    public TraktProxyController(IHttpClientFactory httpClientFactory, IOptions<GatewayOptions> options, ISettingsRepository settingsRepository, ILogger logger)
+    public TraktProxyController(
+        IHttpClientFactory httpClientFactory,
+        IOptions<GatewayOptions> options,
+        IUserRepository userRepository,
+        ILogger logger)
     {
         _httpClientFactory = httpClientFactory;
         _options = options.Value;
-        _settingsRepository = settingsRepository;
+        _userRepository = userRepository;
         _logger = logger;
     }
 
@@ -59,13 +65,36 @@ public class TraktProxyController : ControllerBase
         }
 
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
-        if (json.TryGetProperty("access_token", out var tokenProp))
+
+        // Save to DB if user is authenticated!
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!string.IsNullOrEmpty(userIdStr) && Guid.TryParse(userIdStr, out var userId))
         {
-            var token = tokenProp.GetString();
-            if (!string.IsNullOrEmpty(token))
+            try
             {
-                _logger.Information("Saving Trakt access token to settings");
-                await _settingsRepository.SetValueAsync("trakt_access_token", token);
+                var accessToken = json.GetProperty("access_token").GetString() ?? string.Empty;
+                var refreshToken = json.TryGetProperty("refresh_token", out var rtProp) ? rtProp.GetString() : null;
+                DateTime? expiresAt = null;
+                if (json.TryGetProperty("expires_in", out var expProp) && expProp.ValueKind == JsonValueKind.Number)
+                {
+                    expiresAt = DateTime.UtcNow.AddSeconds(expProp.GetInt64());
+                }
+
+                if (!string.IsNullOrEmpty(accessToken))
+                {
+                    await _userRepository.SaveTraktTokenAsync(new UserTraktToken
+                    {
+                        UserId = userId,
+                        AccessToken = accessToken,
+                        RefreshToken = refreshToken,
+                        ExpiresAt = expiresAt
+                    });
+                    _logger.Information("Saved Trakt token for user {UserId}", userId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Failed to save Trakt token for user {UserId} to database", userId);
             }
         }
 
@@ -75,8 +104,20 @@ public class TraktProxyController : ControllerBase
     [HttpPost("api/trakt/logout")]
     public async Task<IActionResult> Logout()
     {
-        _logger.Information("Clearing Trakt access token from settings");
-        await _settingsRepository.SetValueAsync("trakt_access_token", "");
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!string.IsNullOrEmpty(userIdStr) && Guid.TryParse(userIdStr, out var userId))
+        {
+            try
+            {
+                await _userRepository.DeleteTraktTokenAsync(userId);
+                _logger.Information("Deleted Trakt token for user {UserId} from database", userId);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Failed to delete Trakt token for user {UserId} from database", userId);
+            }
+        }
+
         return Ok(new { success = true });
     }
 
@@ -89,8 +130,20 @@ public class TraktProxyController : ControllerBase
 
         var requestMessage = new HttpRequestMessage(new HttpMethod(Request.Method), url);
         
-        // Inject token from DB instead of client header
-        var accessToken = await _settingsRepository.GetValueAsync("trakt_access_token");
+        string? accessToken = null;
+        if (Request.Headers.TryGetValue("Trakt-Authorization", out var clientTraktAuth) && !string.IsNullOrEmpty(clientTraktAuth))
+        {
+            var headerVal = clientTraktAuth.ToString();
+            if (headerVal.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                accessToken = headerVal.Substring("Bearer ".Length).Trim();
+            }
+            else
+            {
+                accessToken = headerVal.Trim();
+            }
+        }
+
         if (!string.IsNullOrEmpty(accessToken))
         {
             requestMessage.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);

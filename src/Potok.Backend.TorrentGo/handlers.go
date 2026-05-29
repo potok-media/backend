@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -272,7 +273,7 @@ func HandleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-// HandleStream handles seekable high-performance streaming with Range-requests
+// HandleStream handles seekable high-performance streaming with Range-requests or dynamic fMP4 remuxing
 func HandleStream(w http.ResponseWriter, r *http.Request) {
 	hashHex := chi.URLParam(r, "hash")
 	fileIndexStr := chi.URLParam(r, "fileIndex")
@@ -309,23 +310,102 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 
 	file := files[idx]
 
-	// Create seekable reader
+	// 1. Process Loopback Recursion & FFmpeg Bypass checks
+	isRaw := r.URL.Query().Get("raw") == "true"
+	isFFmpeg := strings.HasPrefix(r.Header.Get("User-Agent"), "Lavf/")
+
+	if isRaw || isFFmpeg {
+		// Serve original direct file stream
+		file.Download()
+		reader := file.NewReader()
+		defer reader.Close()
+		reader.SetReadahead(35 * 1024 * 1024)
+		reader.SetResponsive()
+
+		contentType := getMimeType(file.Path())
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		http.ServeContent(w, r, filepath.Base(file.Path()), time.Time{}, reader)
+		return
+	}
+
+	// 2. Determine if dynamic fMP4 remuxing is required
+	audioParam := r.URL.Query().Get("audio")
+	startParam := r.URL.Query().Get("start")
+	ext := strings.ToLower(filepath.Ext(file.Path()))
+	isMKV := ext == ".mkv"
+
+	if audioParam != "" || startParam != "" || isMKV {
+		// Verify if ffmpeg is available
+		if _, err := exec.LookPath("ffmpeg"); err == nil {
+			port := os.Getenv("PORT")
+			if port == "" {
+				port = "5282"
+			}
+
+			// Local loopback URL with "?raw=true" is critical to bypass infinite loop recursion!
+			localStreamURL := fmt.Sprintf("http://127.0.0.1:%s/stream/%s/%s?raw=true", port, hashHex, fileIndexStr)
+
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
+
+			args := []string{}
+			if startParam != "" {
+				// Fast seeking before input for instantaneous start
+				args = append(args, "-ss", startParam)
+			}
+			args = append(args, "-i", localStreamURL)
+			args = append(args, "-map", "0:v:0")
+
+			if audioParam != "" {
+				args = append(args, "-map", fmt.Sprintf("0:%s", audioParam))
+			} else {
+				args = append(args, "-map", "0:a:0?")
+			}
+
+			args = append(args,
+				"-c:v", "copy",
+				"-c:a", "aac",
+				"-f", "mp4",
+				"-movflags", "frag_keyframe+empty_moov",
+				"-",
+			)
+
+			cmd := exec.CommandContext(r.Context(), "ffmpeg", args...)
+			cmd.Stdout = w
+			cmd.Stderr = nil
+
+			if err := cmd.Start(); err != nil {
+				log.Printf("Failed to spawn ffmpeg remuxer: %v", err)
+				http.Error(w, "ffmpeg spawn failed", http.StatusInternalServerError)
+				return
+			}
+
+			if err := cmd.Wait(); err != nil {
+				if r.Context().Err() == nil {
+					log.Printf("ffmpeg remuxer completed with error: %v", err)
+				}
+			}
+			return
+		}
+	}
+
+	// 3. Standard direct progressive playback (MP4 or other natively supported formats)
+	file.Download()
 	reader := file.NewReader()
 	defer reader.Close()
-
-	// Aggressive read-ahead buffer (15 MB) to avoid buffering wheels
-	reader.SetReadahead(15 * 1024 * 1024)
-	// Prioritize active streaming blocks
+	reader.SetReadahead(35 * 1024 * 1024)
 	reader.SetResponsive()
 
 	contentType := getMimeType(file.Path())
-
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	log.Printf("Streaming file: %s (Mime: %s, Size: %d bytes)", file.Path(), contentType, file.Length())
-
-	// Use standard ServeContent to handle range requests elegantly
 	http.ServeContent(w, r, filepath.Base(file.Path()), time.Time{}, reader)
 }
 
@@ -546,5 +626,197 @@ func getMimeType(path string) string {
 			return t
 		}
 		return "application/octet-stream"
+	}
+}
+
+// ClientTrack represents a streamlined track schema for the frontend player
+type ClientTrack struct {
+	Index    int    `json:"index"`    // Absolute index inside container
+	Type     string `json:"type"`     // "audio" or "subtitle"
+	Codec    string `json:"codec"`
+	Language string `json:"language"`
+	Title    string `json:"title"`
+	RelIndex int    `json:"relIndex"` // Stream-relative index (e.g. N-th subtitle stream)
+}
+
+// ClientMetadata represents the unified media metadata response
+type ClientMetadata struct {
+	Success  bool          `json:"success"`
+	Duration float64       `json:"duration"`
+	Tracks   []ClientTrack `json:"tracks"`
+}
+
+// HandleGetMediaMetadata queries the stream structure using ffprobe
+func HandleGetMediaMetadata(w http.ResponseWriter, r *http.Request) {
+	hashHex := chi.URLParam(r, "hash")
+	fileIndexStr := chi.URLParam(r, "fileIndex")
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "5282"
+	}
+
+	probeURL := fmt.Sprintf("http://127.0.0.1:%s/stream/%s/%s", port, hashHex, fileIndexStr)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// 1. Verify if ffprobe is installed in PATH
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		log.Printf("Warning: ffprobe not found in PATH")
+		json.NewEncoder(w).Encode(ClientMetadata{Success: false})
+		return
+	}
+
+	// 2. Query stream metadata with context timeout to prevent deadlocks
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-show_entries", "stream=index,codec_type,codec_name:stream_tags=language,title",
+		"-of", "json",
+		probeURL,
+	)
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	if err := cmd.Run(); err != nil {
+		log.Printf("ffprobe failed: %v, stderr: %s", err, stderrBuf.String())
+		http.Error(w, fmt.Sprintf("Probing failed: %v", err), http.StatusGatewayTimeout)
+		return
+	}
+
+	// 3. Decode ffprobe output
+	type FFProbeStream struct {
+		Index     int               `json:"index"`
+		CodecName string            `json:"codec_name"`
+		CodecType string            `json:"codec_type"`
+		Tags      map[string]string `json:"tags"`
+	}
+
+	type FFProbeResult struct {
+		Streams []FFProbeStream `json:"streams"`
+		Format  *struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
+	}
+
+	var ffResult FFProbeResult
+	if err := json.Unmarshal(stdoutBuf.Bytes(), &ffResult); err != nil {
+		http.Error(w, "Failed to parse probe data: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 4. Map stream formats into clean schema
+	duration, _ := strconv.ParseFloat(ffResult.Format.Duration, 64)
+	tracks := []ClientTrack{}
+	audioCounter := 0
+	subCounter := 0
+
+	for _, s := range ffResult.Streams {
+		if s.CodecType == "audio" {
+			title := ""
+			lang := ""
+			if s.Tags != nil {
+				title = s.Tags["title"]
+				lang = s.Tags["language"]
+			}
+			if title == "" {
+				if lang != "" {
+					title = fmt.Sprintf("Аудио (%s)", strings.ToUpper(lang))
+				} else {
+					title = fmt.Sprintf("Аудиодорожка #%d", audioCounter+1)
+				}
+			}
+			tracks = append(tracks, ClientTrack{
+				Index:    s.Index,
+				Type:     "audio",
+				Codec:    s.CodecName,
+				Language: lang,
+				Title:    title,
+				RelIndex: audioCounter,
+			})
+			audioCounter++
+		} else if s.CodecType == "subtitle" {
+			title := ""
+			lang := ""
+			if s.Tags != nil {
+				title = s.Tags["title"]
+				lang = s.Tags["language"]
+			}
+			if title == "" {
+				if lang != "" {
+					title = fmt.Sprintf("Субтитры (%s)", strings.ToUpper(lang))
+				} else {
+					title = fmt.Sprintf("Субтитры #%d", subCounter+1)
+				}
+			}
+			tracks = append(tracks, ClientTrack{
+				Index:    s.Index,
+				Type:     "subtitle",
+				Codec:    s.CodecName,
+				Language: lang,
+				Title:    title,
+				RelIndex: subCounter,
+			})
+			subCounter++
+		}
+	}
+
+	json.NewEncoder(w).Encode(ClientMetadata{
+		Success:  true,
+		Duration: duration,
+		Tracks:   tracks,
+	})
+}
+
+// HandleGetSubtitles extracts a subtitle track on the fly and streams it as WebVTT
+func HandleGetSubtitles(w http.ResponseWriter, r *http.Request) {
+	hashHex := chi.URLParam(r, "hash")
+	fileIndexStr := chi.URLParam(r, "fileIndex")
+	trackIndexStr := chi.URLParam(r, "trackIndex")
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "5282"
+	}
+
+	streamURL := fmt.Sprintf("http://127.0.0.1:%s/stream/%s/%s", port, hashHex, fileIndexStr)
+
+	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// 1. Verify if ffmpeg is installed in PATH
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		http.Error(w, "ffmpeg not found in PATH", http.StatusInternalServerError)
+		return
+	}
+
+	// 2. Stream dynamic subtitle remuxing, binding execution to HTTP request context
+	cmd := exec.CommandContext(r.Context(), "ffmpeg",
+		"-i", streamURL,
+		"-map", fmt.Sprintf("0:s:%s", trackIndexStr),
+		"-f", "webvtt",
+		"-",
+	)
+
+	cmd.Stdout = w
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to spawn ffmpeg: %v", err)
+		http.Error(w, "ffmpeg spawn failed", http.StatusInternalServerError)
+		return
+	}
+
+	if err := cmd.Wait(); err != nil {
+		// Ignore command cancel errors caused by the client closing connection (normal behavior)
+		if r.Context().Err() == nil {
+			log.Printf("ffmpeg subtitle extraction completed with error: %v", err)
+		}
 	}
 }
