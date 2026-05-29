@@ -57,8 +57,10 @@ public class TorrentsController : ControllerBase
 
         if (string.IsNullOrEmpty(hash)) return BadRequest("Hash is required");
 
-        await _torrentRepository.SetOverrideAsync(hash, season, offset);
-        _eventBroadcaster.Publish("override-updated", new { hash = hash, season = season, episodeOffset = offset });
+        var cleanHash = hash.ToLower();
+
+        await _torrentRepository.SetOverrideAsync(cleanHash, season, offset);
+        _eventBroadcaster.Publish("override-updated", new { hash = cleanHash, season = season, episodeOffset = offset });
         return Ok(new { success = true });
     }
 }

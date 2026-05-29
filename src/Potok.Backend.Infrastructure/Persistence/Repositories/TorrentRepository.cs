@@ -132,14 +132,16 @@ public class TorrentRepository : ITorrentRepository
 
     public async Task<TorrentOverride?> GetOverrideAsync(string hash)
     {
+        var cleanHash = hash?.ToLower() ?? string.Empty;
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync();
         var sql = $@"SELECT hash, season, episode_offset as EpisodeOffset FROM {GatewaySchema}.torrent_overrides WHERE hash = @Hash";
-        return await connection.QuerySingleOrDefaultAsync<TorrentOverride>(sql, new { Hash = hash });
+        return await connection.QuerySingleOrDefaultAsync<TorrentOverride>(sql, new { Hash = cleanHash });
     }
 
     public async Task SetOverrideAsync(string hash, int? season, int? episodeOffset)
     {
+        var cleanHash = hash?.ToLower() ?? string.Empty;
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync();
         var sql = $@"
@@ -148,6 +150,6 @@ public class TorrentRepository : ITorrentRepository
             ON CONFLICT (hash) DO UPDATE SET 
                 season = EXCLUDED.season, 
                 episode_offset = EXCLUDED.episode_offset";
-        await connection.ExecuteAsync(sql, new { Hash = hash, Season = season, Offset = episodeOffset });
+        await connection.ExecuteAsync(sql, new { Hash = cleanHash, Season = season, Offset = episodeOffset });
     }
 }
