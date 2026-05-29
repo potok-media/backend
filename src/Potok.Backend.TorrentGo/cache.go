@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,7 @@ type CacheManager struct {
 	cacheDir      string
 	timeout       time.Duration
 	checkInterval time.Duration
+	maxCacheSize  int64
 
 	mu          sync.RWMutex
 	lastActive  map[string]time.Time
@@ -24,11 +27,19 @@ type CacheManager struct {
 }
 
 func NewCacheManager(client *torrent.Client, cacheDir string, timeout time.Duration, checkInterval time.Duration) *CacheManager {
+	var maxSize int64 = 10 * 1024 * 1024 * 1024 // 10 GB default
+	if envVal := os.Getenv("POTOK_MAX_CACHE_SIZE_GB"); envVal != "" {
+		if val, err := strconv.ParseInt(envVal, 10, 64); err == nil && val > 0 {
+			maxSize = val * 1024 * 1024 * 1024
+		}
+	}
+
 	return &CacheManager{
 		client:        client,
 		cacheDir:      cacheDir,
 		timeout:       timeout,
 		checkInterval: checkInterval,
+		maxCacheSize:  maxSize,
 		lastActive:    make(map[string]time.Time),
 		activeCount:   make(map[string]int),
 	}
@@ -74,6 +85,7 @@ func (cm *CacheManager) Start(ctx context.Context) {
 	slog.Info("CacheManager background worker started", 
 		slog.Duration("timeout", cm.timeout), 
 		slog.Duration("checkInterval", cm.checkInterval),
+		slog.Int64("maxCacheSizeGB", cm.maxCacheSize/(1024*1024*1024)),
 	)
 	
 	ticker := time.NewTicker(cm.checkInterval)
@@ -90,10 +102,25 @@ func (cm *CacheManager) Start(ctx context.Context) {
 	}
 }
 
+func getDirSize(path string) (int64, error) {
+	var size int64
+	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+	return size, err
+}
+
 func (cm *CacheManager) Clean() {
 	torrents := cm.client.Torrents()
 	now := time.Now()
 
+	// 1. First run the idle-timeout sweep
 	for _, t := range torrents {
 		hashHex := t.InfoHash().HexString()
 
@@ -118,6 +145,71 @@ func (cm *CacheManager) Clean() {
 				slog.Duration("idleDuration", now.Sub(lastTouch)),
 			)
 			cm.PurgeTorrent(t)
+		}
+	}
+
+	// 2. Perform total cache size limit check (LRU Cache Eviction)
+	totalSize, err := getDirSize(cm.cacheDir)
+	if err != nil {
+		slog.Warn("CacheManager: Failed to calculate cache directory size", slog.String("error", err.Error()))
+		return
+	}
+
+	if totalSize <= cm.maxCacheSize {
+		return // We are safely below the cache ceiling!
+	}
+
+	slog.Info("CacheManager: Cache size limit exceeded. Initiating LRU eviction sweep...",
+		slog.Int64("currentSize", totalSize),
+		slog.Int64("maxSize", cm.maxCacheSize),
+	)
+
+	// Gather all inactive torrents that can be safely evicted (activeCount == 0)
+	type evictionItem struct {
+		torrent    *torrent.Torrent
+		lastActive time.Time
+	}
+	var inactiveTorrents []evictionItem
+
+	torrents = cm.client.Torrents() // refresh torrents list
+	for _, t := range torrents {
+		hashHex := t.InfoHash().HexString()
+		cm.mu.RLock()
+		activeCount := cm.activeCount[hashHex]
+		lastTouch := cm.lastActive[hashHex]
+		cm.mu.RUnlock()
+
+		if activeCount == 0 {
+			inactiveTorrents = append(inactiveTorrents, evictionItem{
+				torrent:    t,
+				lastActive: lastTouch,
+			})
+		}
+	}
+
+	// Sort inactive torrents by their last active time (oldest first)
+	sort.Slice(inactiveTorrents, func(i, j int) bool {
+		return inactiveTorrents[i].lastActive.Before(inactiveTorrents[j].lastActive)
+	})
+
+	// Evict oldest torrents until we are below the maxCacheSize limit
+	for _, item := range inactiveTorrents {
+		hashHex := item.torrent.InfoHash().HexString()
+		slog.Info("CacheManager: Evicting oldest inactive torrent (LRU)",
+			slog.String("hash", hashHex),
+			slog.Time("lastActive", item.lastActive),
+		)
+		cm.PurgeTorrent(item.torrent)
+
+		// Recompute total size
+		newSize, err := getDirSize(cm.cacheDir)
+		if err != nil {
+			break
+		}
+		totalSize = newSize
+		if totalSize <= cm.maxCacheSize {
+			slog.Info("CacheManager: LRU eviction completed. New size is within limits.", slog.Int64("size", totalSize))
+			break
 		}
 	}
 }

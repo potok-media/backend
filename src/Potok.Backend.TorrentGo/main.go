@@ -124,6 +124,14 @@ func main() {
 	}
 	log.Printf("Cache directory: %s", cacheDir)
 
+	// Clean up any remaining cached files from previous runs to prevent storage accumulation
+	if files, err := os.ReadDir(cacheDir); err == nil {
+		for _, f := range files {
+			os.RemoveAll(filepath.Join(cacheDir, f.Name()))
+		}
+		log.Println("Cleaned up torrent cache directory on startup to reclaim disk space.")
+	}
+
 	// 2. Configure torrent client
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.DataDir = cacheDir
