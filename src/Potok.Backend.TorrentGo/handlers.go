@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -57,8 +56,6 @@ type TorrentFileItem struct {
 	SizeLabel  *string `json:"sizeLabel"`
 	SizeBytes  *int64  `json:"sizeBytes"`
 	Path       *string `json:"path"`
-	Season     *int    `json:"season"`
-	Episode    *int    `json:"episode"`
 	IsSerial   bool    `json:"isSerial"`
 	FolderName string  `json:"folderName"`
 	Extension  string  `json:"extension"`
@@ -150,8 +147,6 @@ func HandleGetFiles(w http.ResponseWriter, r *http.Request) {
 		}
 
 		name := filepath.Base(path)
-		season, episode := parseSeasonAndEpisode(path)
-
 		var title *string
 		if name != "" {
 			title = &name
@@ -164,8 +159,6 @@ func HandleGetFiles(w http.ResponseWriter, r *http.Request) {
 			Title:      title,
 			SizeBytes:  &sizeBytes,
 			Path:       &path,
-			Season:     season,
-			Episode:    episode,
 			IsSerial:   mediaType == "tv",
 			FolderName: "",
 			Extension:  ext,
@@ -474,136 +467,6 @@ func getOrAddTorrent(link string) (*torrent.Torrent, error) {
 	t.AddTrackers(defaultTrackers)
 
 	return t, nil
-}
-
-// parseSeasonAndEpisode extracts season and episode numbers from title string or path
-type regexItem struct {
-	re   *regexp.Regexp
-	keys []string
-}
-
-var torrentRegexes = []regexItem{
-	{regexp.MustCompile(`\bs([0-9]+)\.?ep?([0-9]+)\b`), []string{"season", "episode"}},
-	{regexp.MustCompile(`\b([0-9]{1,2})[x-]([0-9]+)\b`), []string{"season", "episode"}},
-	{regexp.MustCompile(`\bs([0-9]{2})([0-9]{2,3})\b`), []string{"season", "episode"}},
-	{regexp.MustCompile(`season ([0-9]+) episode ([0-9]+)`), []string{"season", "episode"}},
-	{regexp.MustCompile(`сезон ([0-9]+) серия ([0-9]+)`), []string{"season", "episode"}},
-	{regexp.MustCompile(`([0-9]+) season ([0-9]+) episode`), []string{"season", "episode"}},
-	{regexp.MustCompile(`([0-9]+) сезон ([0-9]+) серия`), []string{"season", "episode"}},
-	{regexp.MustCompile(`episode ([0-9]+)`), []string{"episode"}},
-	{regexp.MustCompile(`серия ([0-9]+)`), []string{"episode"}},
-	{regexp.MustCompile(`([0-9]+) episode`), []string{"episode"}},
-	{regexp.MustCompile(`([0-9]+) серия`), []string{"episode"}},
-	{regexp.MustCompile(`season ([0-9]+)`), []string{"season"}},
-	{regexp.MustCompile(`сезон ([0-9]+)`), []string{"season"}},
-	{regexp.MustCompile(`([0-9]+) season`), []string{"season"}},
-	{regexp.MustCompile(`([0-9]+) сезон`), []string{"season"}},
-	{regexp.MustCompile(`\bs([0-9]+)\b`), []string{"season"}},
-	{regexp.MustCompile(`\bep?\.?([0-9]+)\b`), []string{"episode"}},
-	{regexp.MustCompile(`\b([0-9]{1,3}) of ([0-9]+)`), []string{"episode"}},
-	{regexp.MustCompile(`\b([0-9]{1,3}) из ([0-9]+)`), []string{"episode"}},
-	{regexp.MustCompile(` - ([0-9]{1,3})\b`), []string{"episode"}},
-	{regexp.MustCompile(`\[([0-9]{1,3})\]`), []string{"episode"}},
-	{regexp.MustCompile(`([0-9]+) сер`), []string{"episode"}},
-}
-
-var folderRegexes = []*regexp.Regexp{
-	regexp.MustCompile(`season ([0-9]+)`),
-	regexp.MustCompile(`сезон ([0-9]+)`),
-	regexp.MustCompile(`([0-9]+) season`),
-	regexp.MustCompile(`([0-9]+) сезон`),
-	regexp.MustCompile(`\bs([0-9]+)\b`),
-}
-
-func parseSeasonAndEpisode(path string) (*int, *int) {
-	// First clean path: replace underscores with spaces, similar to Swift client
-	cleanPath := strings.ReplaceAll(path, "_", " ")
-
-	name := filepath.Base(cleanPath)
-	nameLower := strings.ToLower(name)
-
-	var season, episode *int
-
-	// 1. Parse filename using the ordered regexes
-	for _, item := range torrentRegexes {
-		matches := item.re.FindStringSubmatch(nameLower)
-		if len(matches) > 1 {
-			for idx, key := range item.keys {
-				if idx+1 < len(matches) {
-					valStr := matches[idx+1]
-					if val, err := strconv.Atoi(valStr); err == nil {
-						if key == "season" && season == nil {
-							season = &val
-						} else if key == "episode" && episode == nil {
-							episode = &val
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// 2. Parse folder name if season is still missing
-	dir := filepath.Dir(cleanPath)
-	if dir != "" && dir != "." && season == nil {
-		folderName := filepath.Base(dir)
-		folderLower := strings.ToLower(folderName)
-		for _, re := range folderRegexes {
-			matches := re.FindStringSubmatch(folderLower)
-			if len(matches) > 1 {
-				if val, err := strconv.Atoi(matches[1]); err == nil {
-					season = &val
-					break
-				}
-			}
-		}
-	}
-
-	// 3. Special case: episode number at the very beginning of filename (e.g. "01.mkv")
-	if episode == nil {
-		reStartNum := regexp.MustCompile(`^([0-9]{1,3})\b`)
-		matches := reStartNum.FindStringSubmatch(nameLower)
-		if len(matches) > 1 {
-			if val, err := strconv.Atoi(matches[1]); err == nil {
-				episode = &val
-			}
-		}
-	}
-
-	// 4. Fallback to finding any standalone number in filename that is not a video resolution
-	if episode == nil {
-		reNum := regexp.MustCompile(`\b([0-9]{1,3})\b`)
-		matches := reNum.FindAllStringSubmatch(nameLower, -1)
-
-		var validNums []int
-		for _, match := range matches {
-			if len(match) > 1 {
-				valStr := match[1]
-				if valStr == "1080" || valStr == "720" || valStr == "2160" || valStr == "264" || valStr == "265" || valStr == "4k" {
-					continue
-				}
-				if val, err := strconv.Atoi(valStr); err == nil {
-					validNums = append(validNums, val)
-				}
-			}
-		}
-
-		if len(validNums) == 1 {
-			// If there is only one standalone number, it must be the episode
-			episode = &validNums[0]
-		} else if len(validNums) > 1 {
-			// If there are multiple, try to skip the one that equals the season
-			for _, val := range validNums {
-				if season != nil && *season == val {
-					continue
-				}
-				episode = &val
-				break
-			}
-		}
-	}
-
-	return season, episode
 }
 
 // getMimeType maps media extensions to video content types for players
