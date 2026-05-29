@@ -34,10 +34,9 @@ services:
       - PORT=${SEARCH_ENGINE_PORT:-6000}
       - ConnectionStrings__DefaultConnection=${DATABASE_URL}
     volumes:
-      # Монтируем файл конфигурации трекеров для редактирования прямо на хосте без пересборки
       - ./config.yml:/app/config.local.yml
 
-  # 🌐 API-шлюз и BFF (Gateway)
+  # 🌐 BFF (Gateway)
   potok-gateway:
     image: ghcr.io/potok-media/potok-gateway:main
     container_name: potok-gateway
@@ -51,6 +50,21 @@ services:
       - Gateway__DefaultSearchEngineUrl=${GATEWAY_SEARCH_ENGINE_URL:-http://potok-searchengine:6000}
     depends_on:
       - potok-searchengine
+
+  # 💻 Веб-клиент Potok (Frontend)
+  potok-web:
+    image: ghcr.io/potok-media/potok-web:main
+    container_name: potok-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3000}:80"
+    environment:
+      - VITE_DEFAULT_BFF_URL=${VITE_DEFAULT_BFF_URL}
+      - VITE_DEFAULT_TORRENT_URL=${VITE_DEFAULT_TORRENT_URL}
+      - VITE_DEFAULT_SEARCH_URL=${VITE_DEFAULT_SEARCH_URL}
+      - VITE_BLOCK_SETTINGS_INPUT=${VITE_BLOCK_SETTINGS_INPUT:-false}
+    depends_on:
+      - potok-gateway
 
 volumes:
   torrent-cache:
