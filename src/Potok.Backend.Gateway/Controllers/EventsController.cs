@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Potok.Backend.Core.Interfaces;
+using System.Net.WebSockets;
+using System.Text.Json;
+using System.Threading;
 
 namespace Potok.Backend.Gateway.Controllers;
 
@@ -8,6 +11,7 @@ namespace Potok.Backend.Gateway.Controllers;
 public class EventsController : ControllerBase
 {
     private readonly IEventBroadcaster _broadcaster;
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
 
     public EventsController(IEventBroadcaster broadcaster)
     {
@@ -17,59 +21,115 @@ public class EventsController : ControllerBase
     [HttpGet]
     public async Task Get(CancellationToken cancellationToken)
     {
-        Response.ContentType = "text/event-stream";
-        Response.Headers.CacheControl = "no-cache";
-        Response.Headers.Connection = "keep-alive";
-        await Response.Body.FlushAsync(cancellationToken);
+        if (!HttpContext.WebSockets.IsWebSocketRequest)
+        {
+            HttpContext.Response.StatusCode = Microsoft.AspNetCore.Http.StatusCodes.Status400BadRequest;
+            return;
+        }
 
+        using var webSocket = await HttpContext.WebSockets.AcceptWebSocketAsync();
         var clientId = Guid.NewGuid();
+        var traceId = Guid.NewGuid().ToString();
         var subscription = _broadcaster.Subscribe(clientId, cancellationToken);
-        
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
-        var enumerator = subscription.GetAsyncEnumerator(cancellationToken);
-        Task<bool>? eventTask = null;
 
+        // 1. Task to stream broadcaster events to the client
+        var sendTask = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var envelope in subscription.WithCancellation(cancellationToken))
+                {
+                    var frame = new
+                    {
+                        @event = envelope.Event,
+                        payload = envelope.Data,
+                        timestamp = DateTime.UtcNow.ToString("o"),
+                        version = "1.0",
+                        traceId = traceId
+                    };
+                    await SafeSendFrameAsync(webSocket, frame, cancellationToken);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Graceful cancellation
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Error(ex, "Error in WebSocket send loop for client {ClientId}", clientId);
+            }
+        }, cancellationToken);
+
+        // 2. Main thread receive loop (waits for client close signals)
+        var buffer = new byte[1024 * 4];
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
+            while (webSocket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
             {
-                eventTask ??= enumerator.MoveNextAsync().AsTask();
-                var timerTask = timer.WaitForNextTickAsync(cancellationToken).AsTask();
-
-                var completedTask = await Task.WhenAny(eventTask, timerTask);
-
-                if (completedTask == eventTask)
+                var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
+                if (result.MessageType == WebSocketMessageType.Close)
                 {
-                    if (!await eventTask) break;
-                    
-                    var envelope = enumerator.Current;
-                    await Response.BodyWriter.WriteAsync(
-                        System.Text.Encoding.UTF8.GetBytes($"event: {envelope.Event}\ndata: {envelope.Data}\n\n"), 
-                        cancellationToken
-                    );
-                    await Response.Body.FlushAsync(cancellationToken);
-                    
-                    eventTask = null;
-                }
-                else
-                {
-                    // Keep-Alive comment to prevent proxy timeouts
-                    await Response.BodyWriter.WriteAsync(
-                        System.Text.Encoding.UTF8.GetBytes(":\n\n"), 
-                        cancellationToken
-                    );
-                    await Response.Body.FlushAsync(cancellationToken);
+                    break;
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (Exception)
         {
-            // Clean exit when client disconnects
+            // Socket drop or cancel
         }
         finally
         {
+            // Unsubscribe client from the gateway broadcaster
             _broadcaster.Unsubscribe(clientId);
-            await enumerator.DisposeAsync();
+
+            // Wait for streaming task to finish gracefully
+            try
+            {
+                await sendTask;
+            }
+            catch
+            {
+                // Suppress background task completion errors on disconnect
+            }
+
+            // Cleanly close the socket from the server side if still open
+            if (webSocket.State == WebSocketState.Open || webSocket.State == WebSocketState.CloseReceived)
+            {
+                try
+                {
+                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                }
+                catch
+                {
+                    // Ignore
+                }
+            }
+        }
+    }
+
+    private async Task SafeSendFrameAsync(WebSocket webSocket, object frame, CancellationToken cancellationToken)
+    {
+        var jsonBytes = JsonSerializer.SerializeToUtf8Bytes(frame);
+        
+        await _writeLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (webSocket.State == WebSocketState.Open)
+            {
+                await webSocket.SendAsync(
+                    new ArraySegment<byte>(jsonBytes),
+                    WebSocketMessageType.Text,
+                    true,
+                    cancellationToken
+                );
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
         }
     }
 }
+
+
+

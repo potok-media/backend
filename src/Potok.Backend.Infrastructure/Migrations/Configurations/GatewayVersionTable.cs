@@ -2,9 +2,9 @@ using FluentMigrator.Runner.VersionTableInfo;
 
 namespace Potok.Backend.Infrastructure.Migrations.Configurations;
 
-public class SearchEngineVersionTable : IVersionTableMetaData
+public class GatewayVersionTable : IVersionTableMetaData
 {
-    public string SchemaName => DbSchema.SearchEngineRaw;
+    public string SchemaName => DbSchema.GatewayRaw;
     public string TableName => "VersionInfo";
     public string ColumnName => "Version";
     public string UniqueIndexName => string.Empty;

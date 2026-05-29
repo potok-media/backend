@@ -9,41 +9,40 @@ namespace Potok.Backend.Gateway.Controllers;
 [Route("api/torrents")]
 public class TorrentsController : ControllerBase
 {
-    private readonly ISearchEngineClient _searchEngineClient;
-    private readonly ITorrServerClient _torrServerClient;
     private readonly ITorrentRepository _torrentRepository;
     private readonly IEventBroadcaster _eventBroadcaster;
 
     public TorrentsController(
-        ISearchEngineClient searchEngineClient, 
-        ITorrServerClient torrServerClient,
         ITorrentRepository torrentRepository,
         IEventBroadcaster eventBroadcaster)
     {
-        _searchEngineClient = searchEngineClient;
-        _torrServerClient = torrServerClient;
         _torrentRepository = torrentRepository;
         _eventBroadcaster = eventBroadcaster;
     }
 
-    [HttpPost("search")]
-    public async Task<IActionResult> SearchTorrents([FromBody] TorrentSearchRequest request)
+    [HttpGet("overrides/{hash}")]
+    public async Task<IActionResult> GetOverride(string hash)
     {
-        var result = await _searchEngineClient.SearchAsync(request);
+        if (string.IsNullOrEmpty(hash)) return BadRequest("Hash is required");
+        var result = await _torrentRepository.GetOverrideAsync(hash.ToLower());
+        if (result == null) return NotFound();
         return Ok(result);
     }
 
-    [HttpPost("files")]
-    public async Task<IActionResult> GetTorrentFiles([FromBody] TorrentFilesRequest request)
+    [HttpPost("overrides/batch")]
+    public async Task<IActionResult> GetBatchOverrides([FromBody] List<string> hashes)
     {
-        var result = await _torrServerClient.GetFilesAsync(request);
-        return Ok(result);
-    }
-
-    [HttpPost("files/normalized")]
-    public async Task<IActionResult> GetNormalizedFiles([FromBody] TorrentFilesRequest request)
-    {
-        var result = await _torrServerClient.GetNormalizedStreamUrlsAsync(request);
+        if (hashes == null || !hashes.Any()) return Ok(new Dictionary<string, object>());
+        var result = new Dictionary<string, object>();
+        foreach (var hash in hashes)
+        {
+            if (string.IsNullOrEmpty(hash)) continue;
+            var ov = await _torrentRepository.GetOverrideAsync(hash.ToLower());
+            if (ov != null)
+            {
+                result[hash.ToLower()] = ov;
+            }
+        }
         return Ok(result);
     }
 
@@ -61,12 +60,5 @@ public class TorrentsController : ControllerBase
         await _torrentRepository.SetOverrideAsync(hash, season, offset);
         _eventBroadcaster.Publish("override-updated", new { hash = hash, season = season, episodeOffset = offset });
         return Ok(new { success = true });
-    }
-
-    [HttpPost("stream")]
-    public async Task<IActionResult> GetStreamUrl([FromBody] TorrentStreamRequest request)
-    {
-        var result = await _torrServerClient.GetStreamUrlAsync(request);
-        return Ok(result);
     }
 }

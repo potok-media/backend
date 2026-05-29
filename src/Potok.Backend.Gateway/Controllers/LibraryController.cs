@@ -10,17 +10,26 @@ namespace Potok.Backend.Gateway.Controllers;
 public class LibraryController : ControllerBase
 {
     private readonly ILibraryOrchestrator _orchestrator;
-    private readonly ISettingsRepository _settings;
     private readonly ILogger _logger;
 
-    public LibraryController(ILibraryOrchestrator orchestrator, ISettingsRepository settings, ILogger logger)
+    public LibraryController(ILibraryOrchestrator orchestrator, ILogger logger)
     {
         _orchestrator = orchestrator;
-        _settings = settings;
         _logger = logger;
     }
 
     private string BaseUrl => $"{Request.Scheme}://{Request.Host}";
+
+    private string? GetTraktAccessToken()
+    {
+        var headerVal = Request.Headers["Trakt-Authorization"].ToString();
+        if (string.IsNullOrEmpty(headerVal)) return null;
+        if (headerVal.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        {
+            return headerVal.Substring("Bearer ".Length).Trim();
+        }
+        return headerVal.Trim();
+    }
 
     [HttpGet("watchlist")]
     public async Task<IActionResult> GetWatchlist() => await GetLibraryItems("watchlist", _orchestrator.GetWatchlistAsync);
@@ -40,10 +49,10 @@ public class LibraryController : ControllerBase
     [HttpGet("profile")]
     public async Task<IActionResult> GetProfile()
     {
-        var accessToken = await _settings.GetValueAsync("trakt_access_token");
+        var accessToken = GetTraktAccessToken();
         if (string.IsNullOrEmpty(accessToken))
         {
-            _logger.Warning("Trakt access token not found in settings when fetching user profile");
+            _logger.Warning("Trakt access token not found in request headers when fetching user profile");
             return Unauthorized("Trakt not connected");
         }
 
@@ -61,10 +70,10 @@ public class LibraryController : ControllerBase
 
     private async Task<IActionResult> GetLibraryItems(string key, Func<string, string, Task<IEnumerable<MediaCard>>> fetchFunc)
     {
-        var accessToken = await _settings.GetValueAsync("trakt_access_token");
+        var accessToken = GetTraktAccessToken();
         if (string.IsNullOrEmpty(accessToken))
         {
-            _logger.Warning("Trakt access token not found in settings when fetching library items");
+            _logger.Warning("Trakt access token not found in request headers when fetching library items");
             return Unauthorized("Trakt not connected");
         }
 

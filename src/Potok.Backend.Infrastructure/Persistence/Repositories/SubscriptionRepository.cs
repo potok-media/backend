@@ -8,7 +8,7 @@ namespace Potok.Backend.Infrastructure.Persistence.Repositories;
 
 public class SubscriptionRepository : ISubscriptionRepository
 {
-    private const string Schema = DbSchema.Name;
+    private const string Schema = DbSchema.SearchEngine;
     private readonly string _connectionString;
 
     public SubscriptionRepository(string connectionString)

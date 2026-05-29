@@ -13,7 +13,8 @@ namespace Potok.Backend.Infrastructure.Persistence.Repositories;
 
 public class TorrentRepository : ITorrentRepository
 {
-    private const string Schema = DbSchema.Name;
+    private const string SearchEngineSchema = DbSchema.SearchEngine;
+    private const string GatewaySchema = DbSchema.Gateway;
     private readonly string _connectionString;
     private readonly ITorrentEnricher _torrentEnricher;
     private readonly ILogger<TorrentRepository> _logger;
@@ -80,12 +81,12 @@ public class TorrentRepository : ITorrentRepository
         await connection.OpenAsync();
 
         var sql = $@"
-            INSERT INTO {Schema}.torrents 
+            INSERT INTO {SearchEngineSchema}.torrents 
             (info_hash, tmdb_id, tracker_name, title, url, size, magnet_uri, seeders, leechers, publish_date, parsed_info, updated_at)
             VALUES 
             (@InfoHash, @TmdbId, @TrackerName, @Title, @Url, @Size, @MagnetUri, @Seeders, @Leechers, @PublishDate, @ParsedInfo::jsonb, now())
             ON CONFLICT (info_hash) DO UPDATE SET
-                tmdb_id = COALESCE(EXCLUDED.tmdb_id, {Schema}.torrents.tmdb_id),
+                tmdb_id = COALESCE(EXCLUDED.tmdb_id, {SearchEngineSchema}.torrents.tmdb_id),
                 seeders = EXCLUDED.seeders,
                 leechers = EXCLUDED.leechers,
                 updated_at = now()";
@@ -133,7 +134,7 @@ public class TorrentRepository : ITorrentRepository
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync();
-        var sql = $@"SELECT hash, season, episode_offset as EpisodeOffset FROM {Schema}.torrent_overrides WHERE hash = @Hash";
+        var sql = $@"SELECT hash, season, episode_offset as EpisodeOffset FROM {GatewaySchema}.torrent_overrides WHERE hash = @Hash";
         return await connection.QuerySingleOrDefaultAsync<TorrentOverride>(sql, new { Hash = hash });
     }
 
@@ -142,7 +143,7 @@ public class TorrentRepository : ITorrentRepository
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync();
         var sql = $@"
-            INSERT INTO {Schema}.torrent_overrides (hash, season, episode_offset) 
+            INSERT INTO {GatewaySchema}.torrent_overrides (hash, season, episode_offset) 
             VALUES (@Hash, @Season, @Offset)
             ON CONFLICT (hash) DO UPDATE SET 
                 season = EXCLUDED.season, 

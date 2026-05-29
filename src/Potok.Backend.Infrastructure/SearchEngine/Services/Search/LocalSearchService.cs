@@ -16,7 +16,7 @@ namespace Potok.Backend.Infrastructure.SearchEngine.Services.Search;
 
 public class LocalSearchService : BaseSearchService, ILocalSearchService
 {
-    private const string Schema = DbSchema.Name;
+    private const string Schema = DbSchema.SearchEngine;
     private readonly string _connectionString;
     private readonly ILogger<LocalSearchService> _logger;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };

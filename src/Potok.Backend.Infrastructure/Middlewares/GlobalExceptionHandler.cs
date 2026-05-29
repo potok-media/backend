@@ -26,6 +26,9 @@ public class GlobalExceptionHandler : IExceptionHandler
             HttpRequestException => (StatusCodes.Status502BadGateway, "Upstream Service Error"),
             UnauthorizedAccessException => (StatusCodes.Status401Unauthorized, "Unauthorized"),
             KeyNotFoundException => (StatusCodes.Status404NotFound, "Resource Not Found"),
+            Polly.Timeout.TimeoutRejectedException => (StatusCodes.Status504GatewayTimeout, "Upstream Timeout"),
+            TaskCanceledException => (StatusCodes.Status504GatewayTimeout, "Upstream Timeout"),
+            OperationCanceledException => (StatusCodes.Status504GatewayTimeout, "Upstream Timeout"),
             _ => (StatusCodes.Status500InternalServerError, "Internal Server Error")
         };
 
