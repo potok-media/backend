@@ -131,6 +131,10 @@ func main() {
 	// DHT endpoint listen port (DHT uses UDP, clients use TCP/UDP)
 	cfg.ListenPort = 55123
 
+	// Ultra High Performance Streaming Tweaks for large 20GB+ files
+	cfg.EstablishedConnsPerTorrent = 250 // Connect to way more peers (default is 40)
+	cfg.HalfOpenConnsPerTorrent = 100    // Faster peer dialing and PEX/DHT handshake (default is 20)
+
 	// Initialize the client
 	client, err := torrent.NewClient(cfg)
 	if err != nil {
@@ -188,11 +192,13 @@ func main() {
 		r.Post("/files", HandleGetFiles)
 		r.Get("/status/{hash}", HandleGetStatus)
 		r.Delete("/{hash}", HandleDeleteTorrent)
+		r.Get("/metadata/{hash}/{fileIndex}", HandleGetMediaMetadata)
 	})
 
 	// Streaming route
 	r.Get("/stream/{hash}/{fileIndex}", HandleStream)
 	r.Get("/stream/{hash}/{fileIndex}/{filename}", HandleStream)
+	r.Get("/stream/{hash}/{fileIndex}/subtitles/{trackIndex}", HandleGetSubtitles)
 	r.Head("/stream/{hash}/{fileIndex}", HandleStream)
 	r.Head("/stream/{hash}/{fileIndex}/{filename}", HandleStream)
 
