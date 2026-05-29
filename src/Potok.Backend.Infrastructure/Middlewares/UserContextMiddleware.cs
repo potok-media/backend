@@ -29,6 +29,7 @@ public class UserContextMiddleware
             path.StartsWith("/api/events") || 
             path.StartsWith("/media/tmdb") || 
             path.StartsWith("/api/media") || 
+            path.StartsWith("/api/torrents/overrides/batch") || 
             (path.StartsWith("/api/auth/register") && gatewayOptions.MultiUserMode))
         {
             await _next(context);
