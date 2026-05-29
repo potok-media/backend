@@ -19,8 +19,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o potok-torrent-go .
 # Final runtime stage
 FROM alpine:latest
 
-# Install ca-certificates and tzdata for secure connections and correct timezones
-RUN apk add --no-cache ca-certificates tzdata
+# Install ca-certificates, tzdata, and ffmpeg (includes ffprobe) for media processing
+RUN apk add --no-cache ca-certificates tzdata ffmpeg
 
 WORKDIR /app
 

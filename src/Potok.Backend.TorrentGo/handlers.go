@@ -352,7 +352,7 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
 
-			args := []string{}
+			args := []string{"-nostdin"}
 			if startParam != "" {
 				// Fast seeking before input for instantaneous start
 				args = append(args, "-ss", startParam)
@@ -518,7 +518,7 @@ var folderRegexes = []*regexp.Regexp{
 func parseSeasonAndEpisode(path string) (*int, *int) {
 	// First clean path: replace underscores with spaces, similar to Swift client
 	cleanPath := strings.ReplaceAll(path, "_", " ")
-	
+
 	name := filepath.Base(cleanPath)
 	nameLower := strings.ToLower(name)
 
@@ -574,7 +574,7 @@ func parseSeasonAndEpisode(path string) (*int, *int) {
 	if episode == nil {
 		reNum := regexp.MustCompile(`\b([0-9]{1,3})\b`)
 		matches := reNum.FindAllStringSubmatch(nameLower, -1)
-		
+
 		var validNums []int
 		for _, match := range matches {
 			if len(match) > 1 {
@@ -631,8 +631,8 @@ func getMimeType(path string) string {
 
 // ClientTrack represents a streamlined track schema for the frontend player
 type ClientTrack struct {
-	Index    int    `json:"index"`    // Absolute index inside container
-	Type     string `json:"type"`     // "audio" or "subtitle"
+	Index    int    `json:"index"` // Absolute index inside container
+	Type     string `json:"type"`  // "audio" or "subtitle"
 	Codec    string `json:"codec"`
 	Language string `json:"language"`
 	Title    string `json:"title"`
