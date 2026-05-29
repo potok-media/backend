@@ -48,6 +48,7 @@ services:
       - ConnectionStrings__DefaultConnection=${DATABASE_URL}
       - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY}
       - Gateway__DefaultSearchEngineUrl=${GATEWAY_SEARCH_ENGINE_URL:-http://potok-searchengine:6000}
+      - Gateway__MultiUserMode=${GATEWAY_MULTI_USER_MODE:-false}
     depends_on:
       - potok-searchengine
 
@@ -65,8 +66,31 @@ services:
       - VITE_BLOCK_SETTINGS_INPUT=${VITE_BLOCK_SETTINGS_INPUT:-false}
     depends_on:
       - potok-gateway
+  db:
+    image: postgres:16-alpine
+    container_name: potok-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-potok}
+      POSTGRES_USER: ${DB_USER:-potok}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-potok}
+    expose:
+      - "5432"
+    ports:
+      - ${DB_PORT:-5432}:5432
+    volumes:
+      - potok-db:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${DB_USER:-potok} -d ${DB_NAME:-potok}
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
+  potok-db: null
   torrent-cache:
     name: potok_torrent_cache
 
