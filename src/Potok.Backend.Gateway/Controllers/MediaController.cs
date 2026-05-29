@@ -96,4 +96,33 @@ public class MediaController : ControllerBase
         var results = await _orchestrator.GetMediaRowAsync(id, page, BaseUrl);
         return Ok(results ?? Enumerable.Empty<MediaCard>());
     }
+
+    [HttpPost("batch")]
+    public async Task<IActionResult> GetBatchDetails([FromBody] BatchMediaRequest request)
+    {
+        if (request?.Items == null || !request.Items.Any())
+        {
+            return Ok(Enumerable.Empty<MediaCard>());
+        }
+
+        var accessToken = GetTraktAccessToken();
+
+        var tasks = request.Items.Select(async item =>
+        {
+            try
+            {
+                return await _orchestrator.GetMediaDetailAsync(item.MediaType, item.TmdbId, accessToken, BaseUrl);
+            }
+            catch
+            {
+                return null;
+            }
+        });
+
+        var cards = await Task.WhenAll(tasks);
+        return Ok(cards.Where(c => c != null));
+    }
 }
+
+public record BatchMediaRequest(System.Collections.Generic.List<BatchMediaItem> Items);
+public record BatchMediaItem(long TmdbId, string MediaType);
