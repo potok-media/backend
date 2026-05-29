@@ -334,10 +334,9 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 	// 2. Determine if dynamic fMP4 remuxing is required
 	audioParam := r.URL.Query().Get("audio")
 	startParam := r.URL.Query().Get("start")
-	ext := strings.ToLower(filepath.Ext(file.Path()))
-	isMKV := ext == ".mkv"
+	remuxParam := r.URL.Query().Get("remux") == "true"
 
-	if audioParam != "" || startParam != "" || isMKV {
+	if audioParam != "" || startParam != "" || remuxParam {
 		// Verify if ffmpeg is available
 		if _, err := exec.LookPath("ffmpeg"); err == nil {
 			port := os.Getenv("PORT")
@@ -369,6 +368,7 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 			args = append(args,
 				"-c:v", "copy",
 				"-c:a", "aac",
+				"-avoid_negative_ts", "make_zero",
 				"-f", "mp4",
 				"-movflags", "frag_keyframe+empty_moov",
 				"-",
@@ -518,7 +518,7 @@ var folderRegexes = []*regexp.Regexp{
 func parseSeasonAndEpisode(path string) (*int, *int) {
 	// First clean path: replace underscores with spaces, similar to Swift client
 	cleanPath := strings.ReplaceAll(path, "_", " ")
-	
+
 	name := filepath.Base(cleanPath)
 	nameLower := strings.ToLower(name)
 
@@ -574,7 +574,7 @@ func parseSeasonAndEpisode(path string) (*int, *int) {
 	if episode == nil {
 		reNum := regexp.MustCompile(`\b([0-9]{1,3})\b`)
 		matches := reNum.FindAllStringSubmatch(nameLower, -1)
-		
+
 		var validNums []int
 		for _, match := range matches {
 			if len(match) > 1 {
@@ -631,8 +631,8 @@ func getMimeType(path string) string {
 
 // ClientTrack represents a streamlined track schema for the frontend player
 type ClientTrack struct {
-	Index    int    `json:"index"`    // Absolute index inside container
-	Type     string `json:"type"`     // "audio" or "subtitle"
+	Index    int    `json:"index"` // Absolute index inside container
+	Type     string `json:"type"`  // "audio" or "subtitle"
 	Codec    string `json:"codec"`
 	Language string `json:"language"`
 	Title    string `json:"title"`
