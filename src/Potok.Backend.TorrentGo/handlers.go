@@ -351,10 +351,9 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
 
-			args := []string{}
+			args := []string{"-nostdin"}
 			if startParam != "" {
-				// Fast seeking before input for instantaneous start
-				args = append(args, "-ss", startParam)
+				args = append(args, "-noaccurate_seek", "-ss", startParam)
 			}
 			args = append(args, "-i", localStreamURL)
 			args = append(args, "-map", "0:v:0")
