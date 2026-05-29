@@ -368,6 +368,7 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 			args = append(args,
 				"-c:v", "copy",
 				"-c:a", "aac",
+				"-af", "aresample=async=1",
 				"-avoid_negative_ts", "make_zero",
 				"-f", "mp4",
 				"-movflags", "frag_keyframe+empty_moov",
