@@ -30,7 +30,9 @@ public record MediaCard(
     [property: JsonPropertyName("nextEpisodeTitle"), JsonProperty("nextEpisodeTitle")] string? NextEpisodeTitle = null,
     [property: JsonPropertyName("airDateTime"), JsonProperty("airDateTime")] DateTime? AirDateTime = null,
     [property: JsonPropertyName("cast"), JsonProperty("cast")] IEnumerable<MediaCredit>? Cast = null,
-    [property: JsonPropertyName("directors"), JsonProperty("directors")] IEnumerable<MediaCredit>? Directors = null
+    [property: JsonPropertyName("directors"), JsonProperty("directors")] IEnumerable<MediaCredit>? Directors = null,
+    [property: JsonPropertyName("kpId"), JsonProperty("kpId")] string? KpId = null,
+    [property: JsonPropertyName("imdbId"), JsonProperty("imdbId")] string? ImdbId = null
 );
 
 public record WatchProgress(
