@@ -13,6 +13,7 @@ on:
           - torrentgo
           - gateway
           - searchengine
+          - torrentgo
       bump_type:
         description: 'Тип обновления версии'
         required: true
@@ -223,6 +224,29 @@ jobs:
           push: true
           tags: ${{ steps.meta-searchengine.outputs.tags }}
           labels: ${{ steps.meta-searchengine.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --- Build & Push: TorrentGo ---
+      - name: Extract TorrentGo metadata
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'torrentgo'
+        id: meta-torrentgo
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/potok-torrentgo
+          tags: |
+            type=raw,value=${{ env.DOCKER_TAG_SECONDARY }}
+            type=raw,value=${{ env.new_version }}
+
+      - name: Build and Push TorrentGo
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'torrentgo'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/Potok.Backend.TorrentGo
+          file: ./src/Potok.Backend.TorrentGo/Dockerfile
+          push: true
+          tags: ${{ steps.meta-torrentgo.outputs.tags }}
+          labels: ${{ steps.meta-torrentgo.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
