@@ -8,11 +8,15 @@ public class MediaOrchestrator : IMediaOrchestrator
 {
     private readonly TmdbClient _tmdbClient;
     private readonly TraktClient _traktClient;
+    private readonly ICacheService _cacheService;
+    private readonly System.Net.Http.IHttpClientFactory _httpClientFactory;
 
-    public MediaOrchestrator(TmdbClient tmdbClient, TraktClient traktClient)
+    public MediaOrchestrator(TmdbClient tmdbClient, TraktClient traktClient, ICacheService cacheService, System.Net.Http.IHttpClientFactory httpClientFactory)
     {
         _tmdbClient = tmdbClient;
         _traktClient = traktClient;
+        _cacheService = cacheService;
+        _httpClientFactory = httpClientFactory;
     }
 
     public async Task<MediaCard> GetMediaDetailAsync(string mediaType, long id, string? accessToken, string baseUrl)
@@ -97,7 +101,13 @@ public class MediaOrchestrator : IMediaOrchestrator
             };
         }
         
-        return card;
+        if (card != null)
+        {
+            var kpId = await GetKpIdAsync(card.Id, card.ImdbId);
+            card = card with { KpId = kpId };
+        }
+        
+        return card!;
     }
 
     public async Task<IEnumerable<MediaCard>> SearchAsync(string query, string baseUrl)
@@ -200,5 +210,60 @@ public class MediaOrchestrator : IMediaOrchestrator
         return response?.Results?
             .Select(item => MediaMapper.MapToMediaCard(item with { MediaType = mediaType ?? item.MediaType }, baseUrl)) 
             ?? Enumerable.Empty<MediaCard>();
+    }
+
+    private async Task<string?> GetKpIdAsync(long tmdbId, string? imdbId)
+    {
+        var cacheKey = $"potok:kp_id:{tmdbId}";
+        return await _cacheService.GetOrCreateAsync(
+            cacheKey,
+            async () => {
+                try
+                {
+                    var httpClient = _httpClientFactory.CreateClient("Default");
+                    httpClient.Timeout = TimeSpan.FromSeconds(5);
+                    var token = "04941a9a3ca3ac16e2b4327347bbc1";
+                    
+                    // Try tmdbId lookup first
+                    var url = $"http://api.alloha.tv/?token={token}&tmdb={tmdbId}";
+                    var response = await httpClient.GetAsync(url);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var json = await response.Content.ReadAsStringAsync();
+                        var obj = Newtonsoft.Json.JsonConvert.DeserializeObject<Newtonsoft.Json.Linq.JObject>(json);
+                        var data = obj?.Value<Newtonsoft.Json.Linq.JObject>("data");
+                        if (data != null)
+                        {
+                            var kp = data.Value<string>("id_kp") ?? data.Value<string>("kp");
+                            if (!string.IsNullOrEmpty(kp) && kp != "0") return kp;
+                        }
+                    }
+                    
+                    // Fallback to imdbId if available
+                    if (!string.IsNullOrEmpty(imdbId))
+                    {
+                        url = $"https://api.alloha.tv/?token={token}&imdb={imdbId}";
+                        response = await httpClient.GetAsync(url);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var json = await response.Content.ReadAsStringAsync();
+                            var obj = Newtonsoft.Json.JsonConvert.DeserializeObject<Newtonsoft.Json.Linq.JObject>(json);
+                            var data = obj?.Value<Newtonsoft.Json.Linq.JObject>("data");
+                            if (data != null)
+                            {
+                                var kp = data.Value<string>("id_kp") ?? data.Value<string>("kp");
+                                if (!string.IsNullOrEmpty(kp) && kp != "0") return kp;
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[MediaOrchestrator] GetKpIdAsync failed: " + ex);
+                }
+                return null;
+            },
+            TimeSpan.FromDays(7)
+        );
     }
 }

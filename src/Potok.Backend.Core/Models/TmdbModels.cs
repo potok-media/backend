@@ -16,7 +16,8 @@ public record TmdbMovie(
     [property: JsonPropertyName("production_companies")] List<TmdbProductionCompany>? ProductionCompanies,
     [property: JsonPropertyName("images")] TmdbImageContainer? Images,
     [property: JsonPropertyName("translations")] TmdbTranslationContainer? Translations,
-    [property: JsonPropertyName("credits")] TmdbCredits? Credits
+    [property: JsonPropertyName("credits")] TmdbCredits? Credits,
+    [property: JsonPropertyName("external_ids")] TmdbExternalIds? ExternalIds = null
 );
 
 public record TmdbTvShow(
@@ -36,7 +37,8 @@ public record TmdbTvShow(
     [property: JsonPropertyName("seasons")] List<TmdbSeason>? Seasons,
     [property: JsonPropertyName("images")] TmdbImageContainer? Images,
     [property: JsonPropertyName("translations")] TmdbTranslationContainer? Translations,
-    [property: JsonPropertyName("credits")] TmdbCredits? Credits
+    [property: JsonPropertyName("credits")] TmdbCredits? Credits,
+    [property: JsonPropertyName("external_ids")] TmdbExternalIds? ExternalIds = null
 );
 
 public record TmdbSeason(
@@ -137,4 +139,9 @@ public record TmdbPagedResponse<T>(
     [property: JsonPropertyName("page")] int Page,
     [property: JsonPropertyName("total_pages")] int TotalPages,
     [property: JsonPropertyName("total_results")] int TotalResults
+);
+
+public record TmdbExternalIds(
+    [property: JsonPropertyName("imdb_id")] string? ImdbId,
+    [property: JsonPropertyName("wikidata_id")] string? WikidataId
 );

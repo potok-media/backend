@@ -110,7 +110,25 @@ func (sm *SpeedMonitor) GetSpeed(hashHex string) TorrentSpeed {
 	return sm.speeds[hashHex]
 }
 
+func raiseRlimit() {
+	var rLimit syscall.Rlimit
+	err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
+	if err != nil {
+		log.Printf("Error getting rlimit: %v", err)
+		return
+	}
+	log.Printf("Current rlimit: cur = %d, max = %d", rLimit.Cur, rLimit.Max)
+	rLimit.Cur = rLimit.Max
+	err = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
+	if err != nil {
+		log.Printf("Error setting rlimit: %v", err)
+		return
+	}
+	log.Printf("Increased rlimit to: %d", rLimit.Cur)
+}
+
 func main() {
+	raiseRlimit()
 	log.Println("Starting Potok Go Torrent Engine...")
 
 	// 1. Setup cache directory
@@ -158,14 +176,14 @@ func main() {
 	go speedMonitor.Start(monitorCtx)
 
 	// 3.5 Initialize CacheManager with 12-Factor Env configuration
-	timeout := 30 * time.Minute
+	timeout := 30 * time.Second
 	if tEnv := os.Getenv("POTOK_CACHE_TIMEOUT"); tEnv != "" {
 		if parsed, err := time.ParseDuration(tEnv); err == nil {
 			timeout = parsed
 		}
 	}
 
-	checkInterval := 1 * time.Minute
+	checkInterval := 10 * time.Second
 	if cEnv := os.Getenv("POTOK_CACHE_CHECK_INTERVAL"); cEnv != "" {
 		if parsed, err := time.ParseDuration(cEnv); err == nil {
 			checkInterval = parsed
@@ -201,6 +219,7 @@ func main() {
 		r.Get("/status/{hash}", HandleGetStatus)
 		r.Delete("/{hash}", HandleDeleteTorrent)
 		r.Get("/metadata/{hash}/{fileIndex}", HandleGetMediaMetadata)
+		r.Get("/thumbnail/{hash}/{fileIndex}", HandleGetThumbnail)
 	})
 
 	// Streaming route
