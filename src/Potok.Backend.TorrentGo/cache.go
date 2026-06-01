@@ -61,6 +61,10 @@ func (cm *CacheManager) IncrementActive(hash string) {
 func (cm *CacheManager) DecrementActive(hash string) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
+	// Prevent resurrection of purged torrents
+	if _, ok := cm.lastActive[hash]; !ok {
+		return
+	}
 	cm.activeCount[hash]--
 	if cm.activeCount[hash] < 0 {
 		cm.activeCount[hash] = 0
@@ -199,16 +203,16 @@ func (cm *CacheManager) Clean() {
 			slog.String("hash", hashHex),
 			slog.Time("lastActive", item.lastActive),
 		)
+		
+		// Subtract the size of the evicted torrent mathematically to avoid infinite queries 
+		// on disk while files are asynchronously deleted
+		evictedSize := item.torrent.BytesCompleted()
+		totalSize -= evictedSize
+
 		cm.PurgeTorrent(item.torrent)
 
-		// Recompute total size
-		newSize, err := getDirSize(cm.cacheDir)
-		if err != nil {
-			break
-		}
-		totalSize = newSize
 		if totalSize <= cm.maxCacheSize {
-			slog.Info("CacheManager: LRU eviction completed. New size is within limits.", slog.Int64("size", totalSize))
+			slog.Info("CacheManager: LRU eviction completed. New size is within limits mathematically.", slog.Int64("size", totalSize))
 			break
 		}
 	}
@@ -217,9 +221,16 @@ func (cm *CacheManager) Clean() {
 func (cm *CacheManager) PurgeTorrent(t *torrent.Torrent) {
 	hashHex := t.InfoHash().HexString()
 
-	// 1. Gather file paths only if metadata is resolved
+	// 1. Gather files and root folder to delete
 	pathsToDelete := []string{}
+	var torrentRootDir string
+
 	if t.Info() != nil {
+		torrentName := t.Name()
+		if torrentName != "" {
+			torrentRootDir = filepath.Join(cm.cacheDir, torrentName)
+			pathsToDelete = append(pathsToDelete, torrentRootDir)
+		}
 		for _, file := range t.Files() {
 			pathsToDelete = append(pathsToDelete, filepath.Join(cm.cacheDir, file.Path()))
 		}
@@ -228,23 +239,48 @@ func (cm *CacheManager) PurgeTorrent(t *torrent.Torrent) {
 	// 2. Drop torrent from client memory
 	t.Drop()
 	cm.Delete(hashHex)
-	slog.Info("Torrent dropped from client memory", slog.String("hash", hashHex))
+	slog.Info("CacheManager: Torrent dropped from client memory", slog.String("hash", hashHex))
 
-	// 3. Delete files from disk
-	for _, p := range pathsToDelete {
-		if err := os.Remove(p); err == nil {
-			slog.Debug("Deleted cached file", slog.String("path", p))
-			// Recursive parent empty directory cleanup
-			cm.removeEmptyDirs(filepath.Dir(p))
+	// 3. Delete files from disk asynchronously in a background goroutine
+	go func() {
+		// Give the OS and torrent client 2 seconds to release any locks
+		time.Sleep(2 * time.Second)
+
+		// Delete all paths recursively (including the root directory/file)
+		for _, p := range pathsToDelete {
+			if err := os.RemoveAll(p); err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				slog.Warn("CacheManager: Failed to delete cached path, retrying in 5 seconds", slog.String("path", p), slog.String("error", err.Error()))
+				time.Sleep(5 * time.Second)
+				if err := os.RemoveAll(p); err != nil {
+					if !os.IsNotExist(err) {
+						slog.Error("CacheManager: Failed to delete cached path after retry", slog.String("path", p), slog.String("error", err.Error()))
+					}
+				} else {
+					slog.Info("CacheManager: Deleted cached path on retry", slog.String("path", p))
+				}
+			} else {
+				slog.Debug("CacheManager: Deleted cached path", slog.String("path", p))
+			}
 		}
-	}
 
-	// 4. Delete the dedicated hash folder
-	hashDir := filepath.Join(cm.cacheDir, hashHex)
-	if _, err := os.Stat(hashDir); err == nil {
-		os.RemoveAll(hashDir)
-		slog.Info("Deleted torrent hash folder", slog.String("path", hashDir))
-	}
+		// Cleanup empty directories recursively up to the cache root
+		if torrentRootDir != "" {
+			cm.removeEmptyDirs(filepath.Dir(torrentRootDir))
+		}
+
+		// 4. Delete the dedicated hash folder if it exists
+		hashDir := filepath.Join(cm.cacheDir, hashHex)
+		if _, err := os.Stat(hashDir); err == nil {
+			if err := os.RemoveAll(hashDir); err != nil {
+				slog.Error("CacheManager: Failed to delete dedicated torrent hash folder", slog.String("path", hashDir), slog.String("error", err.Error()))
+			} else {
+				slog.Info("CacheManager: Deleted dedicated torrent hash folder", slog.String("path", hashDir))
+			}
+		}
+	}()
 }
 
 func (cm *CacheManager) removeEmptyDirs(dirPath string) {
