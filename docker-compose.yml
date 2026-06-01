@@ -1,28 +1,4 @@
 services:
-  # 🌊 Стриминговый движок BitTorrent (TorrentGo)
-  potok-torrentgo:
-    image: ghcr.io/potok-media/potok-torrentgo:main
-    container_name: potok-torrentgo
-    restart: unless-stopped
-    ports:
-      - "${TORRENTGO_PORT:-5282}:${TORRENTGO_PORT:-5282}"
-      # ------------------------------------------------------------------------
-      # Входящие BitTorrent подключения (DHT/Peer listen port)
-      # ------------------------------------------------------------------------
-      # - "55123:55123/udp"
-      #
-      # 💡 ПРИМЕЧАНИЕ ДЛЯ ТЕХ, КТО ЗА NAT / TAILSCALE:
-      # Если ваш сервер находится за NAT без проброса портов или подключен через Tailscale,
-      # входящие UDP-подключения из внешней сети BitTorrent не смогут дойти напрямую до контейнера.
-      # В таком случае этот маппинг бесполезен и должен быть ЗАКОММЕНТИРОВАН.
-      # Клиент TorrentGo автоматически перейдет в режим исходящих соединений (outbound-only),
-      # чего абсолютно достаточно для стабильного скачивания и стриминга медиафайлов.
-      # ------------------------------------------------------------------------
-    environment:
-      - PORT=${TORRENTGO_PORT:-5282}
-    volumes:
-      - torrent-cache:/app/torrent-cache
-
   # 🔍 Поисковый движок по трекерам (SearchEngine)
   potok-searchengine:
     image: ghcr.io/potok-media/potok-searchengine:main
@@ -61,8 +37,6 @@ services:
       - "${WEB_PORT:-3000}:80"
     environment:
       - VITE_DEFAULT_BFF_URL=${VITE_DEFAULT_BFF_URL}
-      - VITE_DEFAULT_TORRENT_URL=${VITE_DEFAULT_TORRENT_URL}
-      - VITE_DEFAULT_SEARCH_URL=${VITE_DEFAULT_SEARCH_URL}
       - VITE_BLOCK_SETTINGS_INPUT=${VITE_BLOCK_SETTINGS_INPUT:-false}
     depends_on:
       - potok-gateway
@@ -91,6 +65,4 @@ services:
 
 volumes:
   potok-db: null
-  torrent-cache:
-    name: potok_torrent_cache
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anacrolix/torrent"
@@ -259,6 +261,12 @@ func HandleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prevent deletion of actively playing torrents
+	if cacheManager.IsStreaming(hashHex) {
+		http.Error(w, "Torrent is actively playing", http.StatusConflict)
+		return
+	}
+
 	log.Printf("Stopping and removing torrent: %s", hashHex)
 	cacheManager.PurgeTorrent(t)
 
@@ -351,7 +359,7 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 			args = append(args, "-i", localStreamURL)
 			args = append(args, "-map", "0:v:0")
 
-			if audioParam != "" {
+			if audioParam != "" && audioParam != "0" && audioParam != "default" {
 				args = append(args, "-map", fmt.Sprintf("0:%s", audioParam))
 			} else {
 				args = append(args, "-map", "0:a:0?")
@@ -682,4 +690,139 @@ func HandleGetSubtitles(w http.ResponseWriter, r *http.Request) {
 			log.Printf("ffmpeg subtitle extraction completed with error: %v", err)
 		}
 	}
+}
+
+type thumbnailCacheEntry struct {
+	Data      []byte
+	CreatedAt time.Time
+}
+
+type ThumbnailCache struct {
+	mu    sync.RWMutex
+	items map[string]thumbnailCacheEntry
+}
+
+var thumbCache = &ThumbnailCache{
+	items: make(map[string]thumbnailCacheEntry),
+}
+
+func init() {
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		for range ticker.C {
+			thumbCache.mu.Lock()
+			now := time.Now()
+			for k, v := range thumbCache.items {
+				if now.Sub(v.CreatedAt) > 10*time.Second {
+					delete(thumbCache.items, k)
+				}
+			}
+			thumbCache.mu.Unlock()
+		}
+	}()
+}
+
+// HandleGetThumbnail extracts or returns a cached thumbnail for a given stream file at a rounded timestamp
+func HandleGetThumbnail(w http.ResponseWriter, r *http.Request) {
+	hashHex := chi.URLParam(r, "hash")
+	fileIndexStr := chi.URLParam(r, "fileIndex")
+	timeStr := r.URL.Query().Get("time")
+
+	var h metainfo.Hash
+	hexBytes, err := hex.DecodeString(hashHex)
+	if err != nil || len(hexBytes) != 20 {
+		http.Error(w, "Invalid torrent hash format", http.StatusBadRequest)
+		return
+	}
+	copy(h[:], hexBytes)
+
+	t, ok := torrentClient.Torrent(h)
+	if !ok {
+		http.Error(w, "Torrent not active. Please add it first.", http.StatusNotFound)
+		return
+	}
+
+	// Strict fileIndex validation via strconv.Atoi
+	fileIndex, err := strconv.Atoi(fileIndexStr)
+	if err != nil || fileIndex < 1 {
+		http.Error(w, "Invalid file index. Must be 1-based.", http.StatusBadRequest)
+		return
+	}
+
+	files := t.Files()
+	idx := fileIndex - 1
+	if idx < 0 || idx >= len(files) {
+		http.Error(w, fmt.Sprintf("File index out of bounds. Must be between 1 and %d.", len(files)), http.StatusBadRequest)
+		return
+	}
+
+	timeVal, err := strconv.ParseFloat(timeStr, 64)
+	if err != nil || timeVal < 0 {
+		timeVal = 0
+	}
+
+	roundedTime := int(math.Round(timeVal / 5.0) * 5)
+	if roundedTime < 0 {
+		roundedTime = 0
+	}
+
+	// Look up in RAM cache
+	cacheKey := fmt.Sprintf("%s_%d_%d", hashHex, fileIndex, roundedTime)
+
+	thumbCache.mu.RLock()
+	entry, found := thumbCache.items[cacheKey]
+	thumbCache.mu.RUnlock()
+
+	if found && time.Since(entry.CreatedAt) <= 10*time.Second {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(entry.Data)
+		return
+	}
+
+	// Verify if ffmpeg is available
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		http.Error(w, "ffmpeg not found in PATH", http.StatusInternalServerError)
+		return
+	}
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "5282"
+	}
+
+	localStreamURL := fmt.Sprintf("http://127.0.0.1:%s/stream/%s/%d?raw=true", port, hashHex, fileIndex)
+
+	// Run ffmpeg to extract thumbnail
+	var buf bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(r.Context(), "ffmpeg",
+		"-nostdin",
+		"-ss", strconv.Itoa(roundedTime),
+		"-i", localStreamURL,
+		"-vframes", "1",
+		"-s", "160x90",
+		"-f", "image2",
+		"-",
+	)
+	cmd.Stdout = &buf
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		log.Printf("FFmpeg thumbnail extraction failed: %v, stderr: %s", err, stderr.String())
+		http.Error(w, fmt.Sprintf("ffmpeg failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	thumbnailData := buf.Bytes()
+
+	// Store in RAM cache
+	thumbCache.mu.Lock()
+	thumbCache.items[cacheKey] = thumbnailCacheEntry{
+		Data:      thumbnailData,
+		CreatedAt: time.Now(),
+	}
+	thumbCache.mu.Unlock()
+
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Write(thumbnailData)
 }

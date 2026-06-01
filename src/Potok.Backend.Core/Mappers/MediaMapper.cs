@@ -82,7 +82,8 @@ public static class MediaMapper
             IsInWatchlist: false,
             IsFavorite: false,
             Cast: MapCredits(movie.Credits?.Cast, baseUrl),
-            Directors: MapCrew(movie.Credits?.Crew, baseUrl, "Director")
+            Directors: MapCrew(movie.Credits?.Crew, baseUrl, "Director"),
+            ImdbId: movie.ExternalIds?.ImdbId
         );
     }
 
@@ -165,7 +166,8 @@ public static class MediaMapper
             IsInWatchlist: false,
             IsFavorite: false,
             Cast: MapCredits(tvShow.Credits?.Cast, baseUrl),
-            Directors: MapCrew(tvShow.Credits?.Crew, baseUrl, "Director")
+            Directors: MapCrew(tvShow.Credits?.Crew, baseUrl, "Director"),
+            ImdbId: tvShow.ExternalIds?.ImdbId
         );
     }
 
