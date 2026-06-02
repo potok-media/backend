@@ -3,16 +3,6 @@ name: Docker Publish
 on:
   workflow_dispatch:
     inputs:
-      service:
-        description: 'Выберите сервис для сборки и деплоя (all - собрать все)'
-        required: true
-        default: 'all'
-        type: choice
-        options:
-          - all
-          - gateway
-          - searchengine
-          - torrentgo
       bump_type:
         description: 'Тип обновления версии'
         required: true
@@ -157,11 +147,8 @@ jobs:
           OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "owner_lc=${OWNER_LC}" >> $GITHUB_OUTPUT
 
-
-
       # --- Build & Push: Gateway ---
       - name: Extract Gateway metadata
-        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'gateway'
         id: meta-gateway
         uses: docker/metadata-action@v5
         with:
@@ -171,7 +158,6 @@ jobs:
             type=raw,value=${{ env.new_version }}
 
       - name: Build and Push Gateway
-        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'gateway'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -184,7 +170,6 @@ jobs:
 
       # --- Build & Push: SearchEngine ---
       - name: Extract SearchEngine metadata
-        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'searchengine'
         id: meta-searchengine
         uses: docker/metadata-action@v5
         with:
@@ -194,7 +179,6 @@ jobs:
             type=raw,value=${{ env.new_version }}
 
       - name: Build and Push SearchEngine
-        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'searchengine'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -207,7 +191,6 @@ jobs:
 
       # --- Build & Push: TorrentGo ---
       - name: Extract TorrentGo metadata
-        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'torrentgo'
         id: meta-torrentgo
         uses: docker/metadata-action@v5
         with:
@@ -217,7 +200,6 @@ jobs:
             type=raw,value=${{ env.new_version }}
 
       - name: Build and Push TorrentGo
-        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'torrentgo'
         uses: docker/build-push-action@v6
         with:
           context: ./src/Potok.Backend.TorrentGo
