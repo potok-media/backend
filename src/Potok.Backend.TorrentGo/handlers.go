@@ -327,6 +327,9 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Accept-Ranges", "bytes")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
 
 		http.ServeContent(w, r, filepath.Base(file.Path()), time.Time{}, reader)
 		return
@@ -351,6 +354,9 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "video/mp4")
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Expires", "0")
 
 			args := []string{"-nostdin"}
 			if startParam != "" {
@@ -365,8 +371,21 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 				args = append(args, "-map", "0:a:0?")
 			}
 
+			// Add video encoding settings based on format
+			fileExt := strings.ToLower(filepath.Ext(file.Path()))
+			if fileExt == ".avi" {
+				args = append(args,
+					"-c:v", "libx264",
+					"-preset", "ultrafast",
+					"-profile:v", "baseline",
+					"-level", "3.0",
+					"-pix_fmt", "yuv420p",
+				)
+			} else {
+				args = append(args, "-c:v", "copy")
+			}
+
 			args = append(args,
-				"-c:v", "copy",
 				"-c:a", "aac",
 				"-af", "aresample=async=1",
 				"-avoid_negative_ts", "make_zero",
@@ -405,6 +424,9 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 
 	log.Printf("Streaming file: %s (Mime: %s, Size: %d bytes)", file.Path(), contentType, file.Length())
 	http.ServeContent(w, r, filepath.Base(file.Path()), time.Time{}, reader)
@@ -539,8 +561,8 @@ func HandleGetMediaMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Query stream metadata with context timeout to prevent deadlocks
-	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	// 2. Query stream metadata with context timeout to prevent deadlocks (increased to 45 seconds)
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "ffprobe",
@@ -638,11 +660,13 @@ func HandleGetMediaMetadata(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	json.NewEncoder(w).Encode(ClientMetadata{
+	metaResponse := ClientMetadata{
 		Success:  true,
 		Duration: duration,
 		Tracks:   tracks,
-	})
+	}
+
+	json.NewEncoder(w).Encode(metaResponse)
 }
 
 // HandleGetSubtitles extracts a subtitle track on the fly and streams it as WebVTT
@@ -761,7 +785,7 @@ func HandleGetThumbnail(w http.ResponseWriter, r *http.Request) {
 		timeVal = 0
 	}
 
-	roundedTime := int(math.Round(timeVal / 5.0) * 5)
+	roundedTime := int(math.Round(timeVal/5.0) * 5)
 	if roundedTime < 0 {
 		roundedTime = 0
 	}
@@ -826,3 +850,5 @@ func HandleGetThumbnail(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Write(thumbnailData)
 }
+
+

@@ -86,12 +86,12 @@ func (cm *CacheManager) Delete(hash string) {
 }
 
 func (cm *CacheManager) Start(ctx context.Context) {
-	slog.Info("CacheManager background worker started", 
-		slog.Duration("timeout", cm.timeout), 
+	slog.Info("CacheManager background worker started",
+		slog.Duration("timeout", cm.timeout),
 		slog.Duration("checkInterval", cm.checkInterval),
 		slog.Int64("maxCacheSizeGB", cm.maxCacheSize/(1024*1024*1024)),
 	)
-	
+
 	ticker := time.NewTicker(cm.checkInterval)
 	defer ticker.Stop()
 
@@ -139,13 +139,13 @@ func (cm *CacheManager) Clean() {
 		}
 
 		if activeCount > 0 {
-			cm.Touch(hashHex) 
+			cm.Touch(hashHex)
 			continue
 		}
 
 		if now.Sub(lastTouch) > cm.timeout {
-			slog.Info("CacheManager: Inactive torrent detected. Starting purge...", 
-				slog.String("hash", hashHex), 
+			slog.Info("CacheManager: Inactive torrent detected. Starting purge...",
+				slog.String("hash", hashHex),
 				slog.Duration("idleDuration", now.Sub(lastTouch)),
 			)
 			cm.PurgeTorrent(t)
@@ -203,8 +203,8 @@ func (cm *CacheManager) Clean() {
 			slog.String("hash", hashHex),
 			slog.Time("lastActive", item.lastActive),
 		)
-		
-		// Subtract the size of the evicted torrent mathematically to avoid infinite queries 
+
+		// Subtract the size of the evicted torrent mathematically to avoid infinite queries
 		// on disk while files are asynchronously deleted
 		evictedSize := item.torrent.BytesCompleted()
 		totalSize -= evictedSize
@@ -297,7 +297,7 @@ func (cm *CacheManager) removeEmptyDirs(dirPath string) {
 			slog.Warn("Failed to remove directory", slog.String("dir", current), slog.String("error", err.Error()))
 			return
 		}
-		
+
 		slog.Debug("Removed empty parent directory", slog.String("dir", current))
 		current = filepath.Dir(current)
 	}
