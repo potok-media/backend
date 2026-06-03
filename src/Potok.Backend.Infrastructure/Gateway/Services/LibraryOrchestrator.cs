@@ -68,7 +68,7 @@ public class LibraryOrchestrator : ILibraryOrchestrator
         return results.Where(r => r != null)!;
     }
 
-    public async Task<IEnumerable<MediaCard>> GetCalendarAsync(string accessToken, string baseUrl)
+    public async Task<IEnumerable<MediaCard>> GetCalendarAsync(string? accessToken, string baseUrl)
     {
         var items = await _traktClient.GetCalendarAsync(accessToken);
         if (items == null) return Enumerable.Empty<MediaCard>();

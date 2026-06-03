@@ -41,7 +41,12 @@ public class LibraryController : ControllerBase
     public async Task<IActionResult> GetHistory() => await GetLibraryItems("history", _orchestrator.GetHistoryAsync);
 
     [HttpGet("calendar")]
-    public async Task<IActionResult> GetCalendar() => await GetLibraryItems("calendar", _orchestrator.GetCalendarAsync);
+    public async Task<IActionResult> GetCalendar()
+    {
+        var accessToken = GetTraktAccessToken();
+        var results = await _orchestrator.GetCalendarAsync(accessToken, BaseUrl);
+        return Ok(results ?? Enumerable.Empty<MediaCard>());
+    }
 
     [HttpGet("up-next")]
     public async Task<IActionResult> GetUpNext() => await GetLibraryItems("up_next", _orchestrator.GetUpNextAsync);

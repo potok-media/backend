@@ -181,9 +181,13 @@ public class TraktClient
         return await SendRequestAsync<List<TraktHistoryItem>>(HttpMethod.Get, $"sync/history/shows/{traktId}?extended=full&limit=1000", accessToken);
     }
 
-    public async Task<List<TraktCalendarItem>?> GetCalendarAsync(string accessToken)
+    public async Task<List<TraktCalendarItem>?> GetCalendarAsync(string? accessToken)
     {
         var start = DateTime.UtcNow.ToString("yyyy-MM-dd");
+        if (string.IsNullOrEmpty(accessToken))
+        {
+            return await SendRequestAsync<List<TraktCalendarItem>>(HttpMethod.Get, $"calendars/all/shows/{start}/30?extended=full", null);
+        }
         return await SendRequestAsync<List<TraktCalendarItem>>(HttpMethod.Get, $"calendars/my/shows/{start}/30?extended=full", accessToken);
     }
 
@@ -212,12 +216,15 @@ public class TraktClient
         return await SendRequestAsync<TraktUserStats>(HttpMethod.Get, "users/me/stats", accessToken);
     }
 
-    private async Task<T?> SendRequestAsync<T>(HttpMethod method, string path, string accessToken)
+    private async Task<T?> SendRequestAsync<T>(HttpMethod method, string path, string? accessToken)
     {
         try
         {
             var request = new HttpRequestMessage(method, path);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            if (!string.IsNullOrEmpty(accessToken))
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            }
 
             var response = await _httpClient.SendAsync(request);
             if (!response.IsSuccessStatusCode)
