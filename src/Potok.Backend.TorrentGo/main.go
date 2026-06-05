@@ -213,16 +213,23 @@ func main() {
 	})
 
 
-	// API routes
-	r.Route("/api/torrent", func(r chi.Router) {
-		r.Post("/files", HandleGetFiles)
-		r.Get("/status/{hash}", HandleGetStatus)
+	// API routes according to REST-API design
+	r.Route("/api/torrents", func(r chi.Router) {
+		r.Post("/", HandleGetFiles)
+		r.Get("/{hash}", HandleGetStatus)
 		r.Delete("/{hash}", HandleDeleteTorrent)
-		r.Get("/metadata/{hash}/{fileIndex}", HandleGetMediaMetadata)
-		r.Get("/thumbnail/{hash}/{fileIndex}", HandleGetThumbnail)
+		r.Get("/{hash}/files/{fileIndex}/metadata", HandleGetMediaMetadata)
+		r.Get("/{hash}/files/{fileIndex}/thumbnail", HandleGetThumbnail)
+
+		// RESTful Streaming sub-routes
+		r.Get("/{hash}/files/{fileIndex}/stream", HandleStream)
+		r.Get("/{hash}/files/{fileIndex}/stream/{filename}", HandleStream)
+		r.Get("/{hash}/files/{fileIndex}/subtitles/{trackIndex}", HandleGetSubtitles)
+		r.Head("/{hash}/files/{fileIndex}/stream", HandleStream)
+		r.Head("/{hash}/files/{fileIndex}/stream/{filename}", HandleStream)
 	})
 
-	// Streaming route
+	// Backward compatibility for /stream routes (used by iOS and existing player logic)
 	r.Get("/stream/{hash}/{fileIndex}", HandleStream)
 	r.Get("/stream/{hash}/{fileIndex}/{filename}", HandleStream)
 	r.Get("/stream/{hash}/{fileIndex}/subtitles/{trackIndex}", HandleGetSubtitles)
