@@ -2,198 +2,106 @@ package main
 
 import (
 	"context"
-	"log"
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"sync"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/anacrolix/torrent"
+	// "Potok.Backend.TorrentGo/auth"
+	"Potok.Backend.TorrentGo/bt"
+	"Potok.Backend.TorrentGo/config"
+	"Potok.Backend.TorrentGo/handlers"
+	"Potok.Backend.TorrentGo/speed"
+	"Potok.Backend.TorrentGo/stream/hls"
+	"Potok.Backend.TorrentGo/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
-
-var (
-	torrentClient *torrent.Client
-	cacheDir      string
-	speedMonitor  *SpeedMonitor
-)
-
-type TorrentSpeed struct {
-	DownloadSpeed int64 `json:"downloadSpeed"`
-	UploadSpeed   int64 `json:"uploadSpeed"`
-}
-
-type SpeedMonitor struct {
-	client *torrent.Client
-	speeds map[string]TorrentSpeed
-	mu     sync.RWMutex
-}
-
-func NewSpeedMonitor(client *torrent.Client) *SpeedMonitor {
-	return &SpeedMonitor{
-		client: client,
-		speeds: make(map[string]TorrentSpeed),
-	}
-}
-
-func (sm *SpeedMonitor) Start(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	type statsSnapshot struct {
-		read  int64
-		write int64
-	}
-	lastStats := make(map[string]statsSnapshot)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			sm.mu.Lock()
-			currentTorrents := sm.client.Torrents()
-
-			// Build active hash set to clean up old entries
-			activeHashes := make(map[string]bool)
-
-			for _, t := range currentTorrents {
-				h := t.InfoHash().HexString()
-				activeHashes[h] = true
-
-				stats := t.Stats()
-				currRead := stats.BytesReadUsefulData.Int64()
-				currWrite := stats.BytesWrittenData.Int64()
-
-				var dlSpeed, ulSpeed int64
-				if last, ok := lastStats[h]; ok {
-					dlSpeed = currRead - last.read
-					ulSpeed = currWrite - last.write
-					if dlSpeed < 0 {
-						dlSpeed = 0
-					}
-					if ulSpeed < 0 {
-						ulSpeed = 0
-					}
-				}
-
-				sm.speeds[h] = TorrentSpeed{
-					DownloadSpeed: dlSpeed,
-					UploadSpeed:   ulSpeed,
-				}
-
-				lastStats[h] = statsSnapshot{
-					read:  currRead,
-					write: currWrite,
-				}
-			}
-
-			// Clean up speed history for torrents that were removed
-			for h := range sm.speeds {
-				if !activeHashes[h] {
-					delete(sm.speeds, h)
-					delete(lastStats, h)
-				}
-			}
-			sm.mu.Unlock()
-		}
-	}
-}
-
-func (sm *SpeedMonitor) GetSpeed(hashHex string) TorrentSpeed {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	return sm.speeds[hashHex]
-}
 
 func raiseRlimit() {
 	var rLimit syscall.Rlimit
 	err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 	if err != nil {
-		log.Printf("Error getting rlimit: %v", err)
+		slog.Warn("Failed to get rlimit", "error", err)
 		return
 	}
-	log.Printf("Current rlimit: cur = %d, max = %d", rLimit.Cur, rLimit.Max)
+	slog.Info("Current rlimit", "cur", rLimit.Cur, "max", rLimit.Max)
 	rLimit.Cur = rLimit.Max
 	err = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 	if err != nil {
-		log.Printf("Error setting rlimit: %v", err)
+		slog.Warn("Failed to set rlimit", "error", err)
 		return
 	}
-	log.Printf("Increased rlimit to: %d", rLimit.Cur)
+	slog.Info("Increased rlimit to max", "cur", rLimit.Cur)
+}
+
+func CORSMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PUT")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
+		w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func main() {
+	// 1. Load config
+	cfg := config.LoadConfig()
+
+	// 2. Setup slog
+	var level slog.Level
+	switch strings.ToLower(cfg.LogLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
+
+	slog.Info("Starting Potok Go Torrent Engine v2...")
 	raiseRlimit()
-	log.Println("Starting Potok Go Torrent Engine...")
 
-	// 1. Setup cache directory
-	var err error
-	cacheDir, err = filepath.Abs("./torrent-cache")
+	// 3. Setup custom storage and BT engine
+	store := storage.NewStorage(cfg)
+	engine, err := bt.NewEngine(cfg, store)
 	if err != nil {
-		log.Fatalf("Failed to get absolute path for cache: %v", err)
-	}
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		log.Fatalf("Failed to create cache directory: %v", err)
-	}
-	log.Printf("Cache directory: %s", cacheDir)
-
-	// Clean up any remaining cached files from previous runs to prevent storage accumulation
-	if files, err := os.ReadDir(cacheDir); err == nil {
-		for _, f := range files {
-			os.RemoveAll(filepath.Join(cacheDir, f.Name()))
-		}
-		log.Println("Cleaned up torrent cache directory on startup to reclaim disk space.")
+		slog.Error("Failed to initialize BT engine", "error", err)
+		os.Exit(1)
 	}
 
-	// 2. Configure torrent client
-	cfg := torrent.NewDefaultClientConfig()
-	cfg.DataDir = cacheDir
-
-	// DHT endpoint listen port (DHT uses UDP, clients use TCP/UDP)
-	cfg.ListenPort = 55123
-
-	// Ultra High Performance Streaming Tweaks for large 20GB+ files
-	cfg.EstablishedConnsPerTorrent = 250 // Connect to way more peers (default is 40)
-	cfg.HalfOpenConnsPerTorrent = 100    // Faster peer dialing and PEX/DHT handshake (default is 20)
-
-	// Initialize the client
-	client, err := torrent.NewClient(cfg)
-	if err != nil {
-		log.Fatalf("Failed to start torrent client: %v", err)
-	}
-	torrentClient = client
-	log.Println("Torrent client initialized with uTP, DHT, and ListenPort 55123.")
-
-	// 3. Initialize speed monitor
-	speedMonitor = NewSpeedMonitor(client)
+	// Setup speed monitor
+	sm := speed.NewMonitor(engine.Client)
 	monitorCtx, monitorCancel := context.WithCancel(context.Background())
 	defer monitorCancel()
-	go speedMonitor.Start(monitorCtx)
+	go sm.Start(monitorCtx)
 
-	// 3.5 Initialize CacheManager with 12-Factor Env configuration
-	timeout := 30 * time.Second
-	if tEnv := os.Getenv("POTOK_CACHE_TIMEOUT"); tEnv != "" {
-		if parsed, err := time.ParseDuration(tEnv); err == nil {
-			timeout = parsed
-		}
-	}
+	// Setup HLS session manager and cleaner
+	hsm := hls.NewSessionManager()
+	hlsCtx, hlsCancel := context.WithCancel(context.Background())
+	defer hlsCancel()
+	go hsm.StartCleaner(hlsCtx, cfg.HLSIdleTimeout)
 
-	checkInterval := 10 * time.Second
-	if cEnv := os.Getenv("POTOK_CACHE_CHECK_INTERVAL"); cEnv != "" {
-		if parsed, err := time.ParseDuration(cEnv); err == nil {
-			checkInterval = parsed
-		}
-	}
+	// Setup thumbnail service
+	ts := handlers.NewThumbnailService(cfg.ThumbCacheSize, cfg.ThumbCacheTTL)
 
-	cacheManager = NewCacheManager(torrentClient, cacheDir, timeout, checkInterval)
-	go cacheManager.Start(monitorCtx)
+	// Handler Context
+	hCtx := handlers.NewHandlerContext(engine, sm, cfg, ts, hsm)
 
-	// 4. Setup HTTP Router
+	// 4. Setup router
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -207,78 +115,86 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(CORSMiddleware)
 
-	// Health check
+	// Health check (unauthenticated)
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
 	})
 
+	// HLS PUT upload endpoint (must be reachable by local ffmpeg process, unauthenticated/loopback only)
+	r.Put("/api/hls/upload/{sessionKey}/{filename}", hCtx.HandleHLSUpload)
 
-	// API routes according to REST-API design
-	r.Route("/api/torrents", func(r chi.Router) {
-		r.Post("/", HandleGetFiles)
-		r.Get("/{hash}", HandleGetStatus)
-		r.Delete("/{hash}", HandleDeleteTorrent)
-		r.Get("/{hash}/files/{fileIndex}/metadata", HandleGetMediaMetadata)
-		r.Get("/{hash}/files/{fileIndex}/thumbnail", HandleGetThumbnail)
+	// Protected routes
+	r.Group(func(r chi.Router) {
+		// r.Use(auth.BasicAuth(cfg)) // Temporarily disabled by user request
 
-		// RESTful Streaming sub-routes
-		r.Get("/{hash}/files/{fileIndex}/stream", HandleStream)
-		r.Get("/{hash}/files/{fileIndex}/stream/{filename}", HandleStream)
-		r.Get("/{hash}/files/{fileIndex}/subtitles/{trackIndex}", HandleGetSubtitles)
-		r.Head("/{hash}/files/{fileIndex}/stream", HandleStream)
-		r.Head("/{hash}/files/{fileIndex}/stream/{filename}", HandleStream)
+		// API routes
+		r.Route("/api/torrents", func(r chi.Router) {
+			r.Post("/", hCtx.HandleGetFiles)
+			r.Get("/{hash}", hCtx.HandleGetStatus)
+			r.Get("/{hash}/diagnostics", hCtx.HandleGetDiagnostics)
+			r.Delete("/{hash}", hCtx.HandleDeleteTorrent)
+			r.Get("/{hash}/files/{fileIndex}/metadata", hCtx.HandleGetMediaMetadata)
+			r.Get("/{hash}/files/{fileIndex}/thumbnail", hCtx.HandleGetThumbnail)
+			r.Get("/{hash}/files/{fileIndex}/subtitles/{trackIndex}", hCtx.HandleGetSubtitles)
+
+			// HLS streaming endpoints
+			r.Get("/{hash}/files/{fileIndex}/hls/master.m3u8", hCtx.HandleHLSMaster)
+			r.Get("/{hash}/files/{fileIndex}/hls/stream.m3u8", hCtx.HandleHLSMedia)
+			r.Get("/{hash}/files/{fileIndex}/hls/{segment}.ts", hCtx.HandleHLSSegment)
+
+			// RESTful Streaming sub-routes
+			r.Get("/{hash}/files/{fileIndex}/stream", hCtx.HandleStream)
+			r.Get("/{hash}/files/{fileIndex}/stream/{filename}", hCtx.HandleStream)
+			r.Head("/{hash}/files/{fileIndex}/stream", hCtx.HandleStream)
+			r.Head("/{hash}/files/{fileIndex}/stream/{filename}", hCtx.HandleStream)
+		})
+
+		// Backward compatibility for /stream routes
+		r.Get("/stream/{hash}/{fileIndex}", hCtx.HandleStream)
+		r.Get("/stream/{hash}/{fileIndex}/{filename}", hCtx.HandleStream)
+		r.Get("/stream/{hash}/{fileIndex}/subtitles/{trackIndex}", hCtx.HandleGetSubtitles)
+		r.Head("/stream/{hash}/{fileIndex}", hCtx.HandleStream)
+		r.Head("/stream/{hash}/{fileIndex}/{filename}", hCtx.HandleStream)
 	})
-
-	// Backward compatibility for /stream routes (used by iOS and existing player logic)
-	r.Get("/stream/{hash}/{fileIndex}", HandleStream)
-	r.Get("/stream/{hash}/{fileIndex}/{filename}", HandleStream)
-	r.Get("/stream/{hash}/{fileIndex}/subtitles/{trackIndex}", HandleGetSubtitles)
-	r.Head("/stream/{hash}/{fileIndex}", HandleStream)
-	r.Head("/stream/{hash}/{fileIndex}/{filename}", HandleStream)
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "5282"
-	}
 
 	// 5. Start Server
 	server := &http.Server{
-		Addr:    ":" + port,
+		Addr:    fmt.Sprintf(":%d", cfg.Port),
 		Handler: r,
 	}
 
-	// Graceful shutdown
+	// Graceful shutdown context
+	idleConnsClosed := make(chan struct{})
 	go func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 		<-sigChan
 
-		log.Println("Shutting down gracefully...")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		slog.Info("Shutting down gracefully...")
+		monitorCancel()
+		hlsCancel()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		server.Shutdown(ctx)
-		torrentClient.Close()
-		log.Println("Server stopped.")
+		if err := server.Shutdown(ctx); err != nil {
+			slog.Error("HTTP server shutdown error", "error", err)
+		}
+
+		if err := engine.Close(); err != nil {
+			slog.Error("BT engine close error", "error", err)
+		}
+
+		close(idleConnsClosed)
 	}()
 
-	log.Printf("Server is running on http://localhost:%s\n", port)
-	if err := server.ListenAndServe(); err != http.ErrServerClosed {
-		log.Fatalf("HTTP server failed: %v", err)
+	slog.Info("Server is running", "url", fmt.Sprintf("http://localhost:%d", cfg.Port))
+	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		slog.Error("HTTP server failed", "error", err)
+		os.Exit(1)
 	}
-}
 
-// CORSMiddleware enables cross-origin resource sharing
-func CORSMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
-		w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	<-idleConnsClosed
+	slog.Info("Server stopped cleanly.")
 }
