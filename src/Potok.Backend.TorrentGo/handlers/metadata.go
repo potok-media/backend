@@ -38,27 +38,80 @@ func (h *HandlerContext) HandleGetMediaMetadata(w http.ResponseWriter, r *http.R
 	hashHex := chi.URLParam(r, "hash")
 	fileIndexStr := chi.URLParam(r, "fileIndex")
 
-	probeURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
-
+	cacheKey := fmt.Sprintf("%s_%s", hashHex, fileIndexStr)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		slog.Warn("ffprobe not found in PATH")
-		_ = json.NewEncoder(w).Encode(ClientMetadata{Success: false})
+	if val, ok := h.metadataCache.Load(cacheKey); ok {
+		slog.Debug("Serving metadata from RAM cache", "key", cacheKey)
+		w.Write(val.([]byte))
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	responseVal, err, _ := h.metadataSFG.Do(cacheKey, func() (interface{}, error) {
+		return h.probeAndCacheMetadata(r.Context(), hashHex, fileIndexStr)
+	})
+
+	if err != nil {
+		slog.Error("Probing metadata failed", "error", err)
+		http.Error(w, "Probing failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Write(responseVal.([]byte))
+}
+
+func (h *HandlerContext) getOrProbeDuration(ctx context.Context, hashHex, fileIndexStr string) (float64, error) {
+	cacheKey := fmt.Sprintf("%s_%s", hashHex, fileIndexStr)
+	if val, ok := h.durationCache.Load(cacheKey); ok {
+		return val.(float64), nil
+	}
+
+	_, err, _ := h.metadataSFG.Do(cacheKey, func() (interface{}, error) {
+		if val, ok := h.durationCache.Load(cacheKey); ok {
+			return val.(float64), nil
+		}
+		return h.probeAndCacheMetadata(ctx, hashHex, fileIndexStr)
+	})
+
+	if err != nil {
+		return 0, err
+	}
+
+	if val, ok := h.durationCache.Load(cacheKey); ok {
+		return val.(float64), nil
+	}
+	return 0, fmt.Errorf("duration not found after probe")
+}
+
+func (h *HandlerContext) probeAndCacheMetadata(ctx context.Context, hashHex, fileIndexStr string) ([]byte, error) {
+	cacheKey := fmt.Sprintf("%s_%s", hashHex, fileIndexStr)
+
+	// Double check cache
+	if val, ok := h.metadataCache.Load(cacheKey); ok {
+		return val.([]byte), nil
+	}
+
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		return nil, fmt.Errorf("ffprobe not found")
+	}
+
+	probeURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
+
+	probeCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ffprobe",
+	args := []string{
 		"-v", "error",
 		"-show_entries", "format=duration",
 		"-show_entries", "stream=index,codec_type,codec_name:stream_tags=language,title",
 		"-of", "json",
-		probeURL,
-	)
+	}
+	if strings.HasPrefix(probeURL, "https://") {
+		args = append(args, "-tls_verify", "0")
+	}
+	args = append(args, probeURL)
+	cmd := exec.CommandContext(probeCtx, "ffprobe", args...)
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
@@ -66,8 +119,7 @@ func (h *HandlerContext) HandleGetMediaMetadata(w http.ResponseWriter, r *http.R
 
 	if err := cmd.Run(); err != nil {
 		slog.Error("ffprobe failed", "error", err, "stderr", stderrBuf.String())
-		http.Error(w, fmt.Sprintf("Probing failed: %v", err), http.StatusGatewayTimeout)
-		return
+		return nil, fmt.Errorf("ffprobe failed: %w", err)
 	}
 
 	type FFProbeStream struct {
@@ -86,8 +138,7 @@ func (h *HandlerContext) HandleGetMediaMetadata(w http.ResponseWriter, r *http.R
 
 	var ffResult FFProbeResult
 	if err := json.Unmarshal(stdoutBuf.Bytes(), &ffResult); err != nil {
-		http.Error(w, "Failed to parse probe data: "+err.Error(), http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("failed to parse probe data: %w", err)
 	}
 
 	var duration float64
@@ -95,7 +146,6 @@ func (h *HandlerContext) HandleGetMediaMetadata(w http.ResponseWriter, r *http.R
 		duration, _ = strconv.ParseFloat(ffResult.Format.Duration, 64)
 	}
 	if duration > 0 {
-		cacheKey := fmt.Sprintf("%s_%s", hashHex, fileIndexStr)
 		h.durationCache.Store(cacheKey, duration)
 	}
 
@@ -179,46 +229,11 @@ func (h *HandlerContext) HandleGetMediaMetadata(w http.ResponseWriter, r *http.R
 		OutroEnd:   outroEnd,
 	}
 
-	_ = json.NewEncoder(w).Encode(metaResponse)
-}
-
-func (h *HandlerContext) getOrProbeDuration(ctx context.Context, hashHex, fileIndexStr string) (float64, error) {
-	cacheKey := fmt.Sprintf("%s_%s", hashHex, fileIndexStr)
-	if val, ok := h.durationCache.Load(cacheKey); ok {
-		return val.(float64), nil
-	}
-
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		return 0, fmt.Errorf("ffprobe not found")
-	}
-
-	probeURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
-
-	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(probeCtx, "ffprobe",
-		"-v", "error",
-		"-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		probeURL,
-	)
-
-	var stdoutBuf bytes.Buffer
-	cmd.Stdout = &stdoutBuf
-
-	if err := cmd.Run(); err != nil {
-		return 0, err
-	}
-
-	trimmed := strings.TrimSpace(stdoutBuf.String())
-	duration, err := strconv.ParseFloat(trimmed, 64)
+	responseBytes, err := json.Marshal(metaResponse)
 	if err != nil {
-		return 0, err
+		return nil, fmt.Errorf("failed to marshal metadata response: %w", err)
 	}
 
-	if duration > 0 {
-		h.durationCache.Store(cacheKey, duration)
-	}
-	return duration, nil
+	h.metadataCache.Store(cacheKey, responseBytes)
+	return responseBytes, nil
 }

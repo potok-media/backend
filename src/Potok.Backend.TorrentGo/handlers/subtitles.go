@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os/exec"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -24,12 +25,17 @@ func (h *HandlerContext) HandleGetSubtitles(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	cmd := exec.CommandContext(r.Context(), "ffmpeg",
+	args := []string{}
+	if strings.HasPrefix(streamURL, "https://") {
+		args = append(args, "-tls_verify", "0")
+	}
+	args = append(args,
 		"-i", streamURL,
 		"-map", fmt.Sprintf("0:s:%s", trackIndexStr),
 		"-f", "webvtt",
 		"-",
 	)
+	cmd := exec.CommandContext(r.Context(), "ffmpeg", args...)
 
 	cmd.Stdout = w
 	cmd.Stderr = nil

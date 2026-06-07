@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/anacrolix/torrent"
 )
@@ -89,6 +90,10 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 		}
 
 		mp := r.cache.GetOrCreateMemPiece(pieceIdx, pieceSize)
+		if !mp.IsComplete() && r.torrent != nil {
+			r.torrent.Piece(pieceIdx).UpdateCompletion()
+			r.torrent.Piece(pieceIdx).SetPriority(torrent.PiecePriorityNow)
+		}
 
 		r.mu.Lock()
 		if r.closed {
@@ -125,6 +130,9 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 			case <-r.ctx.Done():
 				slog.Warn("Reader request context cancelled", "piece", pieceIdx, "err", r.ctx.Err())
 				return totalRead, r.ctx.Err()
+			case <-time.After(15 * time.Second):
+				slog.Warn("Reader timeout waiting for piece block range", "piece", pieceIdx, "offset", pieceOffset, "toRead", toRead)
+				return totalRead, errors.New("timeout waiting for piece data")
 			}
 			r.mu.Lock()
 			closed := r.closed
@@ -135,6 +143,10 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 		}
 
 		nr, err := mp.ReadAt(p[:toRead], pieceOffset)
+		if err == ErrPieceEvicted {
+			slog.Warn("Reader detected piece eviction, retrying download", "piece", pieceIdx)
+			continue
+		}
 		if nr > 0 {
 			totalRead += nr
 			pos += int64(nr)
@@ -160,11 +172,11 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 
 func (r *Reader) Seek(offset int64, whence int) (int64, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	slog.Debug("Reader Seek called", "offset", offset, "whence", whence, "pos", r.pos)
 
 	if r.closed {
+		r.mu.Unlock()
 		return 0, errors.New("reader closed")
 	}
 
@@ -177,14 +189,25 @@ func (r *Reader) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekEnd:
 		newPos = r.fileSize + offset
 	default:
+		r.mu.Unlock()
 		return 0, errors.New("invalid whence")
 	}
 
 	if newPos < 0 {
+		r.mu.Unlock()
 		return 0, errors.New("negative position")
 	}
 	r.pos = newPos
-	return r.pos, nil
+	r.mu.Unlock()
+
+	// Trigger priority update on seek
+	if r.torrent != nil && r.cache != nil {
+		fileStartPiece := int(r.fileOffset / r.cache.pieceLen)
+		fileEndPiece := int((r.fileOffset + r.fileSize - 1) / r.cache.pieceLen)
+		r.cache.UpdatePriorities(fileStartPiece, fileEndPiece)
+	}
+
+	return newPos, nil
 }
 
 func (r *Reader) Close() error {
@@ -222,7 +245,7 @@ func (r *Reader) GetActiveWindow() (int, int) {
 	if start < 0 {
 		start = 0
 	}
-	end := currPiece + 15
+	end := currPiece + 30
 	if end >= r.cache.pieceCount {
 		end = r.cache.pieceCount - 1
 	}

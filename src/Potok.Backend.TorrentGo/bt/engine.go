@@ -3,7 +3,6 @@ package bt
 import (
 	"fmt"
 	"log/slog"
-	"os"
 
 	"Potok.Backend.TorrentGo/config"
 	"Potok.Backend.TorrentGo/storage"
@@ -19,11 +18,6 @@ type Engine struct {
 func NewEngine(cfg *config.Config, store *storage.Storage) (*Engine, error) {
 	clientCfg := torrent.NewDefaultClientConfig()
 	
-	if err := os.MkdirAll("./torrent-cache", 0755); err != nil {
-		slog.Warn("Failed to create torrent-cache directory", "error", err)
-	}
-	clientCfg.DataDir = "./torrent-cache"
-	
 	clientCfg.DefaultStorage = store
 	clientCfg.ListenPort = cfg.ListenPort
 	clientCfg.EstablishedConnsPerTorrent = 250
@@ -31,7 +25,6 @@ func NewEngine(cfg *config.Config, store *storage.Storage) (*Engine, error) {
 	
 	slog.Info("Initializing Torrent Client with custom storage...",
 		slog.Int("listenPort", cfg.ListenPort),
-		slog.String("dataDir", clientCfg.DataDir),
 	)
 
 	client, err := torrent.NewClient(clientCfg)

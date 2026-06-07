@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -10,9 +12,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"Potok.Backend.TorrentGo/storage"
+	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/go-chi/chi/v5"
 )
@@ -73,11 +77,21 @@ func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	fileCacheKey := fmt.Sprintf("%s_%s", hashHex, fileIndexStr)
+	var fh *FileHeaders
+	if val, ok := h.headersCache.Load(fileCacheKey); ok {
+		fh = val.(*FileHeaders)
+	} else {
+		fh = &FileHeaders{}
+		h.headersCache.Store(fileCacheKey, fh)
+	}
+
 	// 1. If it's a raw stream or read by ffmpeg direct analyzer, serve progressive bytes
 	if isRaw || isFFmpeg {
 		slog.Debug("Serving raw/ffmpeg stream", "path", file.Path(), "offset", file.Offset(), "length", file.Length())
-		reader := storage.NewReader(r.Context(), t, cache, file.Offset(), file.Length())
-		defer reader.Close()
+		rawReader := storage.NewReader(r.Context(), t, cache, file.Offset(), file.Length())
+		defer rawReader.Close()
+		reader := NewCachingReader(rawReader, file.Length(), fh)
 
 		contentType := getMimeType(file.Path())
 		w.Header().Set("Content-Type", contentType)
@@ -122,6 +136,9 @@ func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 			args := []string{"-nostdin"}
 			if startParam != "" {
 				args = append(args, "-noaccurate_seek", "-ss", startParam)
+			}
+			if strings.HasPrefix(localStreamURL, "https://") {
+				args = append(args, "-tls_verify", "0")
 			}
 			args = append(args, "-i", localStreamURL)
 			args = append(args, "-map", "0:v:0")
@@ -174,8 +191,9 @@ func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. Fallback: serve progressive bytes using custom storage reader
-	reader := storage.NewReader(r.Context(), t, cache, file.Offset(), file.Length())
-	defer reader.Close()
+	rawReader := storage.NewReader(r.Context(), t, cache, file.Offset(), file.Length())
+	defer rawReader.Close()
+	reader := NewCachingReader(rawReader, file.Length(), fh)
 
 	contentType := getMimeType(file.Path())
 	w.Header().Set("Content-Type", contentType)
@@ -208,5 +226,176 @@ func getMimeType(path string) string {
 			return t
 		}
 		return "application/octet-stream"
+	}
+}
+
+type FileHeaders struct {
+	mu         sync.RWMutex
+	StartBytes []byte
+	EndBytes   []byte
+	EndOffset  int64
+}
+
+type CachingReader struct {
+	reader       *storage.Reader
+	fileSize     int64
+	pos          int64
+	headersCache *FileHeaders
+}
+
+func NewCachingReader(r *storage.Reader, fileSize int64, headersCache *FileHeaders) *CachingReader {
+	return &CachingReader{
+		reader:       r,
+		fileSize:     fileSize,
+		headersCache: headersCache,
+	}
+}
+
+func (cr *CachingReader) Seek(offset int64, whence int) (int64, error) {
+	var newPos int64
+	switch whence {
+	case io.SeekStart:
+		newPos = offset
+	case io.SeekCurrent:
+		newPos = cr.pos + offset
+	case io.SeekEnd:
+		newPos = cr.fileSize + offset
+	default:
+		return 0, fmt.Errorf("invalid whence: %d", whence)
+	}
+	if newPos < 0 {
+		return 0, fmt.Errorf("negative position: %d", newPos)
+	}
+	cr.pos = newPos
+	return newPos, nil
+}
+
+func (cr *CachingReader) Read(p []byte) (int, error) {
+	if cr.pos >= cr.fileSize {
+		return 0, io.EOF
+	}
+
+	limit := cr.fileSize - cr.pos
+	if int64(len(p)) > limit {
+		p = p[:limit]
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	if cr.headersCache != nil {
+		cr.headersCache.mu.RLock()
+		startLen := int64(len(cr.headersCache.StartBytes))
+		endLen := int64(len(cr.headersCache.EndBytes))
+		endOffset := cr.headersCache.EndOffset
+
+		// Case 1: Read falls entirely within StartBytes
+		if cr.pos+int64(len(p)) <= startLen {
+			copy(p, cr.headersCache.StartBytes[cr.pos:cr.pos+int64(len(p))])
+			cr.pos += int64(len(p))
+			cr.headersCache.mu.RUnlock()
+			return len(p), nil
+		}
+
+		// Case 2: Read falls entirely within EndBytes
+		if cr.pos >= endOffset && cr.pos+int64(len(p)) <= endOffset+endLen {
+			localStart := cr.pos - endOffset
+			copy(p, cr.headersCache.EndBytes[localStart:localStart+int64(len(p))])
+			cr.pos += int64(len(p))
+			cr.headersCache.mu.RUnlock()
+			return len(p), nil
+		}
+		cr.headersCache.mu.RUnlock()
+	}
+
+	// Fallback to underlying storage reader
+	_, err := cr.reader.Seek(cr.pos, io.SeekStart)
+	if err != nil {
+		return 0, err
+	}
+
+	n, err := cr.reader.Read(p)
+	if n > 0 {
+		cr.pos += int64(n)
+	}
+
+	return n, err
+}
+
+func (cr *CachingReader) Close() error {
+	return cr.reader.Close()
+}
+
+func (h *HandlerContext) preloadHeadersToCache(hashHex, fileIndexStr string, file *torrent.File, cache *storage.Cache, t *torrent.Torrent) {
+	cacheKey := fmt.Sprintf("%s_%s", hashHex, fileIndexStr)
+	var fh *FileHeaders
+	if val, ok := h.headersCache.Load(cacheKey); ok {
+		fh = val.(*FileHeaders)
+	} else {
+		fh = &FileHeaders{}
+		h.headersCache.Store(cacheKey, fh)
+	}
+
+	fileSize := file.Length()
+	startMax := int64(8 * 1024 * 1024)
+	if startMax > fileSize {
+		startMax = fileSize
+	}
+	endMin := fileSize - int64(8 * 1024 * 1024)
+	if endMin < 0 {
+		endMin = 0
+	}
+
+	// Read lock to check if already fully cached to avoid redundant operations
+	fh.mu.RLock()
+	hasStart := int64(len(fh.StartBytes)) >= startMax
+	hasEnd := endMin >= fileSize || int64(len(fh.EndBytes)) >= (fileSize-endMin)
+	fh.mu.RUnlock()
+
+	if hasStart && hasEnd {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// 1. Read first 8MB without lock
+	if !hasStart {
+		reader := storage.NewReader(ctx, t, cache, file.Offset(), fileSize)
+		buf := make([]byte, startMax)
+		n, err := io.ReadFull(reader, buf)
+		reader.Close()
+
+		if n > 0 {
+			fh.mu.Lock()
+			if int64(len(fh.StartBytes)) < int64(n) {
+				fh.StartBytes = buf[:n]
+			}
+			fh.mu.Unlock()
+		}
+		slog.Info("Proactively cached start headers in RAM", "size", n, "key", cacheKey, "err", err)
+	}
+
+	// 2. Read last 8MB without lock
+	if !hasEnd {
+		reader := storage.NewReader(ctx, t, cache, file.Offset(), fileSize)
+		_, err := reader.Seek(endMin, io.SeekStart)
+		if err == nil {
+			buf := make([]byte, fileSize-endMin)
+			n, err := io.ReadFull(reader, buf)
+			reader.Close()
+
+			if n > 0 {
+				fh.mu.Lock()
+				if int64(len(fh.EndBytes)) < int64(n) {
+					fh.EndOffset = endMin
+					fh.EndBytes = buf[:n]
+				}
+				fh.mu.Unlock()
+			}
+			slog.Info("Proactively cached end headers in RAM", "size", n, "key", cacheKey, "err", err)
+		} else {
+			reader.Close()
+		}
 	}
 }

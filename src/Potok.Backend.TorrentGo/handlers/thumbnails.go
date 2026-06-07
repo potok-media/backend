@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -180,15 +181,21 @@ func (h *HandlerContext) HandleGetThumbnail(w http.ResponseWriter, r *http.Reque
 
 		var buf bytes.Buffer
 		var stderr bytes.Buffer
-		cmd := exec.CommandContext(r.Context(), "ffmpeg",
+		args := []string{
 			"-nostdin",
 			"-ss", strconv.Itoa(roundedTime),
+		}
+		if strings.HasPrefix(localStreamURL, "https://") {
+			args = append(args, "-tls_verify", "0")
+		}
+		args = append(args,
 			"-i", localStreamURL,
 			"-vframes", "1",
 			"-s", "160x90",
 			"-f", "image2",
 			"-",
 		)
+		cmd := exec.CommandContext(r.Context(), "ffmpeg", args...)
 		cmd.Stdout = &buf
 		cmd.Stderr = &stderr
 

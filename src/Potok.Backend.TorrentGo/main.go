@@ -17,7 +17,6 @@ import (
 	"Potok.Backend.TorrentGo/config"
 	"Potok.Backend.TorrentGo/handlers"
 	"Potok.Backend.TorrentGo/speed"
-	"Potok.Backend.TorrentGo/stream/hls"
 	"Potok.Backend.TorrentGo/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -42,9 +41,23 @@ func raiseRlimit() {
 
 func CORSMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PUT")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		
+		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
+		if reqHeaders != "" {
+			w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+		} else {
+			w.Header().Set("Access-Control-Allow-Headers", "*")
+		}
+		
+		w.Header().Set("Access-Control-Allow-Private-Network", "true")
 		w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -89,40 +102,46 @@ func main() {
 	defer monitorCancel()
 	go sm.Start(monitorCtx)
 
-	// Setup HLS session manager and cleaner
-	hsm := hls.NewSessionManager()
-	hlsCtx, hlsCancel := context.WithCancel(context.Background())
-	defer hlsCancel()
-	go hsm.StartCleaner(hlsCtx, cfg.HLSIdleTimeout)
-
 	// Setup thumbnail service
 	ts := handlers.NewThumbnailService(cfg.ThumbCacheSize, cfg.ThumbCacheTTL)
 
 	// Handler Context
-	hCtx := handlers.NewHandlerContext(engine, sm, cfg, ts, hsm)
+	hCtx := handlers.NewHandlerContext(engine, sm, cfg, ts)
 
 	// 4. Setup router
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if req.URL.Path == "/health" {
-				next.ServeHTTP(w, req)
-				return
-			}
-			middleware.Logger(next).ServeHTTP(w, req)
-		})
-	})
+	
+    r.Use(CORSMiddleware)
 	r.Use(middleware.Recoverer)
-	r.Use(CORSMiddleware)
+	r.Use(func(next http.Handler) http.Handler {
+    	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+    		if req.URL.Path == "/health" || req.URL.Path == "/health/" {
+    			next.ServeHTTP(w, req)
+    			return
+    		}
+    		middleware.Logger(next).ServeHTTP(w, req)
+    	})
+    })
+	
+
+	// Ensure CORS is set on 404 and 405 responses
+	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		CORSMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+		})).ServeHTTP(w, r)
+	})
+
+	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+		CORSMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		})).ServeHTTP(w, r)
+	})
 
 	// Health check (unauthenticated)
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})
-
-	// HLS PUT upload endpoint (must be reachable by local ffmpeg process, unauthenticated/loopback only)
-	r.Put("/api/hls/upload/{sessionKey}/{filename}", hCtx.HandleHLSUpload)
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -137,11 +156,6 @@ func main() {
 			r.Get("/{hash}/files/{fileIndex}/metadata", hCtx.HandleGetMediaMetadata)
 			r.Get("/{hash}/files/{fileIndex}/thumbnail", hCtx.HandleGetThumbnail)
 			r.Get("/{hash}/files/{fileIndex}/subtitles/{trackIndex}", hCtx.HandleGetSubtitles)
-
-			// HLS streaming endpoints
-			r.Get("/{hash}/files/{fileIndex}/hls/master.m3u8", hCtx.HandleHLSMaster)
-			r.Get("/{hash}/files/{fileIndex}/hls/stream.m3u8", hCtx.HandleHLSMedia)
-			r.Get("/{hash}/files/{fileIndex}/hls/{segment}.ts", hCtx.HandleHLSSegment)
 
 			// RESTful Streaming sub-routes
 			r.Get("/{hash}/files/{fileIndex}/stream", hCtx.HandleStream)
@@ -173,7 +187,6 @@ func main() {
 
 		slog.Info("Shutting down gracefully...")
 		monitorCancel()
-		hlsCancel()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -189,7 +202,7 @@ func main() {
 		close(idleConnsClosed)
 	}()
 
-	slog.Info("Server is running", "url", fmt.Sprintf("http://localhost:%d", cfg.Port))
+	slog.Info("Server is running (HTTP)", "url", fmt.Sprintf("http://localhost:%d", cfg.Port))
 	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("HTTP server failed", "error", err)
 		os.Exit(1)

@@ -123,8 +123,27 @@ func (c *Cache) UnregisterReader(r *Reader) {
 func (c *Cache) getReaderWindows() map[int]bool {
 	protected := make(map[int]bool)
 	for r := range c.readers {
+		// 1. Protect sliding active window
 		start, end := r.GetActiveWindow()
 		for i := start; i <= end; i++ {
+			protected[i] = true
+		}
+
+		// 2. Protect file headers (first 3 pieces) and footers (last 3 pieces)
+		r.mu.Lock()
+		fileOffset := r.fileOffset
+		fileSize := r.fileSize
+		r.mu.Unlock()
+
+		fileStartPiece := int(fileOffset / c.pieceLen)
+		fileEndPiece := int((fileOffset + fileSize - 1) / c.pieceLen)
+
+		// Protect first 3 pieces of the file
+		for i := fileStartPiece; i < fileStartPiece+3 && i <= fileEndPiece; i++ {
+			protected[i] = true
+		}
+		// Protect last 3 pieces of the file
+		for i := fileEndPiece - 2; i <= fileEndPiece && i >= fileStartPiece; i++ {
 			protected[i] = true
 		}
 	}
@@ -209,23 +228,25 @@ func (c *Cache) UpdatePriorities(fileStartPiece, fileEndPiece int) {
 			desired[currPiece] = torrent.PiecePriorityNow
 		}
 
-		for idx := currPiece + 1; idx <= currPiece+15; idx++ {
+		for idx := currPiece + 1; idx <= currPiece+30; idx++ {
 			if idx >= fileStartPiece && idx <= fileEndPiece {
 				if desired[idx] < torrent.PiecePriorityHigh {
 					desired[idx] = torrent.PiecePriorityHigh
 				}
 			}
 		}
-	}
 
-	// Ensure last 2 pieces of the file (critical for ffprobe cues/metadata) are always prioritized
-	if fileEndPiece >= fileStartPiece {
-		if desired[fileEndPiece] < torrent.PiecePriorityHigh {
-			desired[fileEndPiece] = torrent.PiecePriorityHigh
+		// Ensure first 2 pieces (headers) are prioritized
+		for idx := fileStartPiece; idx < fileStartPiece+2 && idx <= fileEndPiece; idx++ {
+			if desired[idx] < torrent.PiecePriorityHigh {
+				desired[idx] = torrent.PiecePriorityHigh
+			}
 		}
-		if fileEndPiece-1 >= fileStartPiece {
-			if desired[fileEndPiece-1] < torrent.PiecePriorityHigh {
-				desired[fileEndPiece-1] = torrent.PiecePriorityHigh
+
+		// Ensure last 2 pieces (footers/cues) are prioritized
+		for idx := fileEndPiece - 1; idx <= fileEndPiece && idx >= fileStartPiece; idx++ {
+			if desired[idx] < torrent.PiecePriorityHigh {
+				desired[idx] = torrent.PiecePriorityHigh
 			}
 		}
 	}

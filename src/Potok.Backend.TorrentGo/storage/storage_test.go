@@ -139,11 +139,11 @@ func TestCacheEvictionWithReaderProtection(t *testing.T) {
 	}
 	
 	hash := metainfo.NewHashFromHex("0123456789abcdef0123456789abcdef01234567")
-	cache := NewCache(hash, cfg.CacheSizeBytes, 10, 30)
+	cache := NewCache(hash, cfg.CacheSizeBytes, 10, 50)
 
 	mp0 := cache.GetOrCreateMemPiece(0, 10)
-	mp20 := cache.GetOrCreateMemPiece(20, 10)
-	mp21 := cache.GetOrCreateMemPiece(21, 10)
+	mp40 := cache.GetOrCreateMemPiece(40, 10)
+	mp41 := cache.GetOrCreateMemPiece(41, 10)
 
 	_, _ = mp0.WriteAt([]byte("0123456789"), 0)
 	mp0.MarkComplete()
@@ -152,8 +152,8 @@ func TestCacheEvictionWithReaderProtection(t *testing.T) {
 
 	time.Sleep(5 * time.Millisecond)
 
-	_, _ = mp20.WriteAt([]byte("0123456789"), 0)
-	mp20.MarkComplete()
+	_, _ = mp40.WriteAt([]byte("0123456789"), 0)
+	mp40.MarkComplete()
 	cache.UpdateFilled(10)
 	cache.EvictIfNeeded()
 
@@ -161,15 +161,15 @@ func TestCacheEvictionWithReaderProtection(t *testing.T) {
 	r := &Reader{
 		cache:      cache,
 		fileOffset: 0,
-		fileSize:   300,
-		pos:        0, // will protect piece 0 (window 0 to 15)
+		fileSize:   500,
+		pos:        0, // will protect piece 0 (window 0 to 30)
 	}
 	cache.RegisterReader(r)
 
-	// Write to piece 21, exceeding capacity of 20
+	// Write to piece 41, exceeding capacity of 20
 	time.Sleep(5 * time.Millisecond)
-	_, _ = mp21.WriteAt([]byte("0123456789"), 0)
-	mp21.MarkComplete()
+	_, _ = mp41.WriteAt([]byte("0123456789"), 0)
+	mp41.MarkComplete()
 	cache.UpdateFilled(10)
 	cache.EvictIfNeeded()
 
@@ -179,11 +179,11 @@ func TestCacheEvictionWithReaderProtection(t *testing.T) {
 	if _, ok := cache.pieces[0]; !ok {
 		t.Errorf("Expected piece 0 to be protected by reader and NOT evicted")
 	}
-	if _, ok := cache.pieces[20]; ok {
-		t.Errorf("Expected piece 20 to be evicted because it was not protected")
+	if _, ok := cache.pieces[40]; ok {
+		t.Errorf("Expected piece 40 to be evicted because it was not protected")
 	}
-	if _, ok := cache.pieces[21]; !ok {
-		t.Errorf("Expected piece 21 to be retained")
+	if _, ok := cache.pieces[41]; !ok {
+		t.Errorf("Expected piece 41 to be retained")
 	}
 }
 

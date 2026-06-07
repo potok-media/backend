@@ -1,10 +1,14 @@
 package storage
 
 import (
+	"errors"
 	"io"
 	"sync"
 	"time"
 )
+
+var ErrPieceEvicted = errors.New("piece data evicted from cache")
+
 
 type MemPiece struct {
 	mu            sync.RWMutex
@@ -48,10 +52,11 @@ func (m *MemPiece) Release() {
 
 func (m *MemPiece) ReadAt(p []byte, off int64) (n int, err error) {
 	m.mu.Lock()
-	m.accessed = time.Now()
 	if m.data == nil {
-		m.data = make([]byte, m.size)
+		m.mu.Unlock()
+		return 0, ErrPieceEvicted
 	}
+	m.accessed = time.Now()
 	m.mu.Unlock()
 
 	m.mu.RLock()
@@ -104,11 +109,10 @@ func (m *MemPiece) WriteAt(p []byte, off int64) (n int, err error) {
 func (m *MemPiece) MarkComplete() {
 	m.mu.Lock()
 	m.complete = true
-	if m.data == nil {
-		m.data = make([]byte, m.size)
-	}
-	for i := range m.writtenBlocks {
-		m.writtenBlocks[i] = true
+	if m.data != nil {
+		for i := range m.writtenBlocks {
+			m.writtenBlocks[i] = true
+		}
 	}
 	m.accessed = time.Now()
 	if m.notifyCh != nil {
@@ -130,14 +134,14 @@ func (m *MemPiece) MarkComplete() {
 func (m *MemPiece) IsComplete() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.complete
+	return m.complete && m.data != nil
 }
 
 func (m *MemPiece) HasRange(off int64, length int64) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if m.complete {
+	if m.complete && m.data != nil {
 		return true
 	}
 	if m.data == nil {

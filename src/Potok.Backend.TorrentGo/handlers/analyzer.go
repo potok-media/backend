@@ -3,14 +3,18 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"math/bits"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/anacrolix/torrent/metainfo"
 )
 
 type TimecodeRange struct {
@@ -30,6 +34,23 @@ func (h *HandlerContext) AnalyzeTorrent(hashHex string, videoFiles []parsedFile)
 	if len(videoFiles) < 2 {
 		slog.Info("Analyzer: skipping torrent, not enough episodes", "hash", hashHex, "count", len(videoFiles))
 		return
+	}
+
+	if _, ok := h.timecodeCache.Load(hashHex); ok {
+		return
+	}
+
+	var infoHash metainfo.Hash
+	hexBytes, err := hex.DecodeString(hashHex)
+	if err == nil && len(hexBytes) == 20 {
+		copy(infoHash[:], hexBytes)
+		if t, ok := h.Engine.Client.Torrent(infoHash); ok {
+			stats := t.Stats()
+			if stats.PiecesComplete < t.NumPieces() {
+				slog.Info("Analyzer: skipping background analysis because torrent is not fully downloaded", "hash", hashHex, "complete", stats.PiecesComplete, "total", t.NumPieces())
+				return
+			}
+		}
 	}
 
 	slog.Info("Analyzer: starting background analysis for torrent", "hash", hashHex, "episodes", len(videoFiles))
@@ -121,16 +142,22 @@ func (h *HandlerContext) getEpisodeFingerprint(ctx context.Context, hashHex stri
 	defer cancel()
 
 	// ffmpeg extracts 8 minutes of audio and outputs it to stdout
-	ffmpegCmd := exec.CommandContext(extractCtx, "ffmpeg",
+	args := []string{
 		"-nostdin",
 		"-ss", "0",
 		"-t", "480",
+	}
+	if strings.HasPrefix(streamURL, "https://") {
+		args = append(args, "-tls_verify", "0")
+	}
+	args = append(args,
 		"-i", streamURL,
 		"-ac", "1",
 		"-ar", "8000",
 		"-f", "wav",
 		"-",
 	)
+	ffmpegCmd := exec.CommandContext(extractCtx, "ffmpeg", args...)
 
 	// fpcalc reads wav from stdin and outputs raw json fingerprint
 	fpcalcCmd := exec.CommandContext(extractCtx, "fpcalc",

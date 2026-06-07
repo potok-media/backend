@@ -17,9 +17,9 @@ import (
 	"Potok.Backend.TorrentGo/bt"
 	"Potok.Backend.TorrentGo/config"
 	"Potok.Backend.TorrentGo/speed"
-	"Potok.Backend.TorrentGo/stream/hls"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/singleflight"
 )
 
 type parsedFile struct {
@@ -32,18 +32,19 @@ type HandlerContext struct {
 	SpeedMonitor      *speed.Monitor
 	Config            *config.Config
 	ThumbService      *ThumbnailService
-	HLSSessionManager *hls.SessionManager
 	durationCache     sync.Map // map[string]float64
 	timecodeCache     sync.Map // map[string]map[string]*TimecodeRange
+	metadataCache     sync.Map // map[string][]byte
+	headersCache      sync.Map // map[string]*FileHeaders
+	metadataSFG       singleflight.Group
 }
 
-func NewHandlerContext(engine *bt.Engine, sm *speed.Monitor, cfg *config.Config, ts *ThumbnailService, hsm *hls.SessionManager) *HandlerContext {
+func NewHandlerContext(engine *bt.Engine, sm *speed.Monitor, cfg *config.Config, ts *ThumbnailService) *HandlerContext {
 	return &HandlerContext{
 		Engine:            engine,
 		SpeedMonitor:      sm,
 		Config:            cfg,
 		ThumbService:      ts,
-		HLSSessionManager: hsm,
 	}
 }
 
@@ -186,9 +187,10 @@ func (h *HandlerContext) HandleGetFiles(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Start background intro/outro timecode analysis if it is a multi-file torrent
-	if len(videoFiles) >= 2 {
-		go h.AnalyzeTorrent(hashHex, videoFiles)
-	}
+	// Commented out to prevent network choking:
+	// if len(videoFiles) >= 2 && !h.Config.DisableAnalyzer {
+	// 	go h.AnalyzeTorrent(hashHex, videoFiles)
+	// }
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(response)
