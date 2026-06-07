@@ -89,6 +89,23 @@ func (h *HandlerContext) HandleHLSMedia(w http.ResponseWriter, r *http.Request) 
 	}
 	s.Touch()
 
+	// If client requests a different start position, seek FFmpeg to the new position
+	if startParam != "" && s.GetStartPos() != startParam {
+		startSecs := parseStartSecs(startParam)
+		segDur := h.Config.HLSSegmentDuration
+		if segDur <= 0 {
+			segDur = 6
+		}
+		newStartNum := int(startSecs / float64(segDur))
+		inputURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
+		uploadURL := h.getLoopbackURL(fmt.Sprintf("/api/hls/upload/%s", sessionKey))
+
+		s.ClearSegmentsOnSeek(newStartNum)
+		if seekErr := s.StartFFmpeg(context.Background(), inputURL, audioParam, startParam, newStartNum, uploadURL); seekErr != nil {
+			slog.Error("Failed to seek HLS session to new start position", "error", seekErr, "start", startParam)
+		}
+	}
+
 	// Get duration of the video
 	duration, err := h.getOrProbeDuration(r.Context(), hashHex, fileIndexStr)
 	if err != nil || duration <= 0 {

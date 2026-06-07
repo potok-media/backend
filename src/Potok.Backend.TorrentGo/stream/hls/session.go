@@ -60,6 +60,12 @@ func (s *HLSSession) HasFailed() bool {
 	return s.Failed
 }
 
+func (s *HLSSession) GetStartPos() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.StartPos
+}
+
 func (s *HLSSession) SetPlaylistData(data string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
