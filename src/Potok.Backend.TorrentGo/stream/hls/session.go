@@ -117,10 +117,8 @@ func (s *HLSSession) ClearSegmentsOnSeek(newStartNum int) {
 	defer s.mu.Unlock()
 
 	for k, v := range s.Segments {
-		if v.Index < newStartNum {
-			v.SetData(nil) // Wake up waiting readers to prevent hanging
-			delete(s.Segments, k)
-		}
+		v.SetData(nil) // Wake up waiting readers to prevent hanging
+		delete(s.Segments, k)
 	}
 }
 
@@ -162,6 +160,9 @@ func (s *HLSSession) StartFFmpeg(ctx context.Context, inputURL, audioTrack, star
 	s.mu.Lock()
 	oldCmd := s.Cmd
 	oldCancel := s.Cancel
+	if oldCmd != nil {
+		s.Cmd = nil
+	}
 	s.mu.Unlock()
 
 	if oldCmd != nil {

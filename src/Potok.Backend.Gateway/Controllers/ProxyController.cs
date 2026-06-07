@@ -132,7 +132,8 @@ public class ProxyController : ControllerBase
                 if (key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase) ||
                     key.Equals("Connection", StringComparison.OrdinalIgnoreCase) ||
                     key.Equals("Keep-Alive", StringComparison.OrdinalIgnoreCase) ||
-                    key.Equals("Upgrade", StringComparison.OrdinalIgnoreCase))
+                    key.Equals("Upgrade", StringComparison.OrdinalIgnoreCase) ||
+                    key.StartsWith("Access-Control-", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -143,6 +144,10 @@ public class ProxyController : ControllerBase
             foreach (var header in response.Content.Headers)
             {
                 var key = header.Key;
+                if (key.StartsWith("Access-Control-", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
                 if (key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) || 
                     key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) ||
                     key.Equals("Content-Range", StringComparison.OrdinalIgnoreCase))
@@ -150,6 +155,11 @@ public class ProxyController : ControllerBase
                     Response.Headers[key] = header.Value.ToArray();
                 }
             }
+
+            // Explicitly set wildcard CORS headers to avoid target server conflicts and guarantee client-side playback success
+            Response.Headers["Access-Control-Allow-Origin"] = "*";
+            Response.Headers["Access-Control-Allow-Headers"] = "*";
+            Response.Headers["Access-Control-Allow-Methods"] = "*";
 
             var contentType = response.Content.Headers.ContentType?.ToString() ?? "";
             bool isM3u8 = contentType.Contains("mpegurl") || contentType.Contains("x-mpegurl") || url.Contains(".m3u8");
