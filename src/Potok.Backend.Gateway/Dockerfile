@@ -12,7 +12,9 @@ RUN dotnet restore "src/Potok.Backend.Gateway/Potok.Backend.Gateway.csproj"
 # Copy the remaining source files and build/publish the application
 COPY . .
 WORKDIR "/src/src/Potok.Backend.Gateway"
-RUN dotnet publish "Potok.Backend.Gateway.csproj" -c Release -o /app/publish /p:UseAppHost=false
+
+ARG VERSION=1.0.0-dev
+RUN dotnet publish "Potok.Backend.Gateway.csproj" -c Release -o /app/publish /p:UseAppHost=false /p:Version=${VERSION}
 
 # Runtime stage
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final

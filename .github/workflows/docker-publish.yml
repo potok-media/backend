@@ -52,10 +52,14 @@ jobs:
       - name: Get current version and bump
         id: get_version
         run: |
-          if [ ! -f VERSION ]; then
-            echo "1.0.0" > VERSION
-          fi
-          CURRENT_VERSION=$(cat VERSION)
+          # Fetch all tags from remote repository to have correct tag history
+          git fetch --tags --force
+          
+          # Get latest tag matching "v*" or fallback to "v0.0.0"
+          LATEST_TAG=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || echo "v0.0.0")
+          echo "Latest Git Tag: $LATEST_TAG"
+          
+          CURRENT_VERSION="${LATEST_TAG#v}"
           IS_BETA="${{ github.event.inputs.is_beta }}"
           BUMP="${{ env.BUMP }}"
           
@@ -113,20 +117,14 @@ jobs:
             echo "PRERELEASE=false" >> $GITHUB_ENV
           fi
           
-          echo "$NEW_VERSION" > VERSION
           echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
-          
-          # Update .csproj files
-          find src -name "*.csproj" -exec sed -i "s|<PropertyGroup>|<PropertyGroup>\n        <Version>$NEW_VERSION</Version>|g" {} +
-          # Prevent duplicate Version tags if they already existed (simple approach)
-          find src -name "*.csproj" -exec sed -i "N;s|<Version>.*</Version>\n.*<Version>|<Version>|;P;D" {} +
 
-      - name: Commit version bump
+      - name: Push Git Tag
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git commit -am "Bump backend version to ${{ env.new_version }}"
-          git push
+          git tag "v${{ env.new_version }}"
+          git push origin "v${{ env.new_version }}"
 
       # Set up Buildx runner
       - name: Set up Docker Buildx
@@ -165,6 +163,8 @@ jobs:
           push: true
           tags: ${{ steps.meta-gateway.outputs.tags }}
           labels: ${{ steps.meta-gateway.outputs.labels }}
+          build-args: |
+            VERSION=${{ env.new_version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -186,6 +186,8 @@ jobs:
           push: true
           tags: ${{ steps.meta-searchengine.outputs.tags }}
           labels: ${{ steps.meta-searchengine.outputs.labels }}
+          build-args: |
+            VERSION=${{ env.new_version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
