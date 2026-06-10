@@ -115,6 +115,7 @@ func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 				slog.Warn("Preload failed", "error", err)
 			}
 		}()
+		go h.preloadHeadersToCache(hashHex, fileIndexStr, file, cache, t)
 	}
 
 	// 3. Check if dynamic fMP4 remuxing is requested or required
@@ -137,7 +138,9 @@ func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 			if startParam != "" {
 				args = append(args, "-noaccurate_seek", "-ss", startParam)
 			}
-			args = append(args, "-readrate", "1.5")
+			if checkReadrateSupport() {
+				args = append(args, "-readrate", "3.5")
+			}
 			if strings.HasPrefix(localStreamURL, "https://") {
 				args = append(args, "-tls_verify", "0")
 			}
@@ -399,4 +402,23 @@ func (h *HandlerContext) preloadHeadersToCache(hashHex, fileIndexStr string, fil
 			reader.Close()
 		}
 	}
+}
+
+var (
+	supportsReadrate     bool
+	supportsReadrateOnce sync.Once
+)
+
+func checkReadrateSupport() bool {
+	supportsReadrateOnce.Do(func() {
+		cmd := exec.Command("ffmpeg", "-readrate", "1.0", "-h")
+		if err := cmd.Run(); err == nil {
+			supportsReadrate = true
+			slog.Info("ffmpeg supports -readrate option")
+		} else {
+			supportsReadrate = false
+			slog.Warn("ffmpeg does not support -readrate option; omitting readrate limit")
+		}
+	})
+	return supportsReadrate
 }
