@@ -137,6 +137,7 @@ func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 			if startParam != "" {
 				args = append(args, "-noaccurate_seek", "-ss", startParam)
 			}
+			args = append(args, "-readrate", "1.5")
 			if strings.HasPrefix(localStreamURL, "https://") {
 				args = append(args, "-tls_verify", "0")
 			}
