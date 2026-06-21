@@ -52,7 +52,7 @@ public class MediaOrchestrator : IMediaOrchestrator
             var movie = await movieTask;
             if (movie != null)
             {
-                card = MediaMapper.MapToMediaCard(movie, baseUrl);
+                card = MediaMapper.MapToMediaCard(movie, baseUrl, language: _tmdbClient.CurrentLanguage);
             }
         }
         else
@@ -60,7 +60,7 @@ public class MediaOrchestrator : IMediaOrchestrator
             var tv = await tvTask;
             if (tv != null)
             {
-                card = MediaMapper.MapToMediaCard(tv, baseUrl);
+                card = MediaMapper.MapToMediaCard(tv, baseUrl, language: _tmdbClient.CurrentLanguage);
             }
         }
 
@@ -128,11 +128,11 @@ public class MediaOrchestrator : IMediaOrchestrator
             
             if (movieTask.Result != null && !string.IsNullOrEmpty(movieTask.Result.Title)) 
             {
-                results.Add(MediaMapper.MapToMediaCard(movieTask.Result, baseUrl));
+                results.Add(MediaMapper.MapToMediaCard(movieTask.Result, baseUrl, language: _tmdbClient.CurrentLanguage));
             }
-            if (tvTask.Result != null && !string.IsNullOrEmpty(tvTask.Result.Name)) 
+            if (tvTask.Result != null && !string.IsNullOrEmpty(tvTask.Result.Name))
             {
-                results.Add(MediaMapper.MapToMediaCard(tvTask.Result, baseUrl));
+                results.Add(MediaMapper.MapToMediaCard(tvTask.Result, baseUrl, language: _tmdbClient.CurrentLanguage));
             }
             
             if (results.Any()) return results;

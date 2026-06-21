@@ -77,14 +77,14 @@ public class HomeService : IHomeService
                         {
                             var movie = await _tmdbClient.GetAsync<TmdbMovie>($"{mediaType}/{id}?append_to_response=images,translations&include_image_language=ru,en,null");
                             if (movie == null) return null;
-                            var card = MediaMapper.MapToMediaCard(movie, baseUrl, posterSize, backdropSize, logoSize);
+                            var card = MediaMapper.MapToMediaCard(movie, baseUrl, posterSize, backdropSize, logoSize, _tmdbClient.CurrentLanguage);
                             return new HeroItem(Id: card.Id, Card: card, BackdropSrc: card.BackdropSrc);
                         }
                         else
                         {
                             var tv = await _tmdbClient.GetAsync<TmdbTvShow>($"{mediaType}/{id}?append_to_response=images,translations&include_image_language=ru,en,null");
                             if (tv == null) return null;
-                            var card = MediaMapper.MapToMediaCard(tv, baseUrl, posterSize, backdropSize, logoSize);
+                            var card = MediaMapper.MapToMediaCard(tv, baseUrl, posterSize, backdropSize, logoSize, _tmdbClient.CurrentLanguage);
                             return new HeroItem(Id: card.Id, Card: card, BackdropSrc: card.BackdropSrc);
                         }
                     }

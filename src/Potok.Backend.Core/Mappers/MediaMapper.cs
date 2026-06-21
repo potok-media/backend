@@ -5,11 +5,12 @@ namespace Potok.Backend.Core.Mappers;
 public static class MediaMapper
 {
     public static MediaCard MapToMediaCard(
-        TmdbMovie movie, 
-        string? baseUrl = null, 
-        string posterSize = "w780", 
-        string backdropSize = "original", 
-        string logoSize = "original")
+        TmdbMovie movie,
+        string? baseUrl = null,
+        string posterSize = "w780",
+        string backdropSize = "original",
+        string logoSize = "original",
+        string? language = null)
     {
         var id = movie.Id;
         var title = movie.Title ?? "Unknown";
@@ -29,8 +30,9 @@ public static class MediaMapper
 
         if (movie.Images?.Logos != null)
         {
-            var logoEntry = movie.Images.Logos.FirstOrDefault(l => l.Iso639_1 == "ru") 
+            var logoEntry = (!string.IsNullOrWhiteSpace(language) ? movie.Images.Logos.FirstOrDefault(l => l.Iso639_1 == language) : null)
                 ?? movie.Images.Logos.FirstOrDefault(l => l.Iso639_1 == "en")
+                ?? movie.Images.Logos.FirstOrDefault(l => l.Iso639_1 == "ru")
                 ?? movie.Images.Logos.FirstOrDefault();
             
             logoPath = BuildUrl(baseUrl, "logo", logoSize, logoEntry?.FilePath);
@@ -88,11 +90,12 @@ public static class MediaMapper
     }
 
     public static MediaCard MapToMediaCard(
-        TmdbTvShow tvShow, 
-        string? baseUrl = null, 
-        string posterSize = "w780", 
-        string backdropSize = "original", 
-        string logoSize = "original")
+        TmdbTvShow tvShow,
+        string? baseUrl = null,
+        string posterSize = "w780",
+        string backdropSize = "original",
+        string logoSize = "original",
+        string? language = null)
     {
         var id = tvShow.Id;
         var title = tvShow.Name ?? "Unknown";
@@ -112,8 +115,9 @@ public static class MediaMapper
 
         if (tvShow.Images?.Logos != null)
         {
-            var logoEntry = tvShow.Images.Logos.FirstOrDefault(l => l.Iso639_1 == "ru") 
+            var logoEntry = (!string.IsNullOrWhiteSpace(language) ? tvShow.Images.Logos.FirstOrDefault(l => l.Iso639_1 == language) : null)
                 ?? tvShow.Images.Logos.FirstOrDefault(l => l.Iso639_1 == "en")
+                ?? tvShow.Images.Logos.FirstOrDefault(l => l.Iso639_1 == "ru")
                 ?? tvShow.Images.Logos.FirstOrDefault();
             
             logoPath = BuildUrl(baseUrl, "logo", logoSize, logoEntry?.FilePath);
