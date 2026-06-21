@@ -96,6 +96,7 @@ Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 // --- Регистрация зависимостей ---
 builder.Services.AddSharedInfrastructure(builder.Configuration);
 builder.Services.AddSearchEngineInfrastructure(builder.Configuration);
+builder.Services.AddSignalR();
 
 var app = builder.Build();
 
