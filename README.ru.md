@@ -160,6 +160,98 @@ volumes:
 cp src/Potok.Backend.SearchEngine/config.yml ./config.yml   # затем настройте трекеры/креды
 ```
 
+<details>
+<summary><code>config.yml</code> (образец SearchEngine — креды пустые)</summary>
+
+```yaml
+##### настройка сервера
+listen-ip: any
+listen-port: 8081
+api-key: ''
+web: true
+
+##### настройка выдачи
+
+# если у раздач одинаковый infohash, считаем это один торрент; объединяем их метаданные (сид/личи, размеры, названия, ссылки) в одну итоговую запись.
+merge-duplicates: true
+
+# дополнительно схлопывает те же дубликаты, когда отличаются лишь номер/суффикс в названии (Release, Release (1), Release-2), если infohash совпадает; метаданные так же объединяются.
+# работает для сериалов/аниме и похожего контента
+merge-num-duplicates: true
+
+cache:
+  enable: true        # включение сохранения данных в кеш
+  expiry: 15          # срок жизни данных в кеше (мин)
+  auth-expiry: 1      # срок жизни аутентификационных данных в кеше (дни)
+
+refresh:
+  enable: true        # Включить обновление данных торрентов
+  timeout: 1440         # Интервал запуска сервиса (мин)
+  older-than-min: 180  # Обновлять торренты старше 60 минут
+  limit: 50           # Лимит торрентов за проход
+
+# ffprobe/языки через TorrServer
+ffprobe:
+  enable: true
+  timeout: 60
+  tsuri: ''
+  batch-size: 20 # кол-во торрентов для обработки за раз
+  attempts: 3 # максимальное кол-во попыток получения ffprobe для одного торрента
+  authorization:
+    login: ''
+    password: ''
+
+##### настройка трекеров
+
+rutracker:
+  enable-search: true
+
+  # Обновление популярных раздач по категориям
+  popular:
+    enable: false # включить/выключить
+    timeout: 600 # задержка в минутах
+    max-pages: 3 # глубина обхода в каждой категории
+    categories: # список категорий для парсинга (например: [549, 22, 1666])
+      [ 1106, 1105, 2491, 1389 ]
+
+  authorization:
+    login: ''
+    password: ''
+
+animelayer:
+  enable-search: true
+  authorization:
+    login: ''
+    password: ''
+
+nnmclub:
+  enable-search: true
+
+rutor:
+  enable-search: true
+
+aniliberty:
+  enable-search: true
+
+kinozal:
+  enable-search: true
+
+  authorization:
+    login: ''
+    password: ''
+
+megapeer:
+  enable-search: true
+
+proxy:
+  list:
+    - url: ''
+      username: ''
+      password: ''
+```
+
+</details>
+
 > [!NOTE]
 > За NAT/Tailscale без проброса портов оставьте входящий UDP-порт TorrentGo закомментированным —
 > он перейдёт в режим outbound-only, чего достаточно для стриминга.

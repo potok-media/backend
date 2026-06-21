@@ -162,6 +162,97 @@ Grab the sample to start from:
 cp src/Potok.Backend.SearchEngine/config.yml ./config.yml   # then edit trackers/credentials
 ```
 
+<details>
+<summary><code>config.yml</code> (SearchEngine sample — empty credentials)</summary>
+
+```yaml
+##### Server
+listen-ip: any
+listen-port: 8081
+api-key: ''
+web: true
+
+##### Result output
+
+# Same infohash → treat as one torrent; merge metadata (seeders/leechers, sizes, names, links).
+merge-duplicates: true
+
+# Also collapse such duplicates when only a number/suffix differs (Release, Release (1),
+# Release-2) and the infohash matches. Useful for TV shows / anime.
+merge-num-duplicates: true
+
+cache:
+  enable: true        # cache fetched data
+  expiry: 15          # cache TTL (min)
+  auth-expiry: 1      # auth data TTL (days)
+
+refresh:
+  enable: true        # periodically refresh torrent data
+  timeout: 1440       # run interval (min)
+  older-than-min: 180 # refresh torrents older than this (min)
+  limit: 50           # torrents per pass
+
+# ffprobe / audio languages via TorrServer
+ffprobe:
+  enable: true
+  timeout: 60
+  tsuri: ''
+  batch-size: 20      # torrents processed per batch
+  attempts: 3         # max ffprobe attempts per torrent
+  authorization:
+    login: ''
+    password: ''
+
+##### Trackers
+
+rutracker:
+  enable-search: true
+
+  # Crawl popular releases by category
+  popular:
+    enable: false     # on/off
+    timeout: 600      # delay (min)
+    max-pages: 3      # crawl depth per category
+    categories:       # categories to parse (e.g. [549, 22, 1666])
+      [ 1106, 1105, 2491, 1389 ]
+
+  authorization:
+    login: ''
+    password: ''
+
+animelayer:
+  enable-search: true
+  authorization:
+    login: ''
+    password: ''
+
+nnmclub:
+  enable-search: true
+
+rutor:
+  enable-search: true
+
+aniliberty:
+  enable-search: true
+
+kinozal:
+  enable-search: true
+  authorization:
+    login: ''
+    password: ''
+
+megapeer:
+  enable-search: true
+
+proxy:
+  list:
+    - url: ''
+      username: ''
+      password: ''
+```
+
+</details>
+
 > [!NOTE]
 > Behind NAT/Tailscale without port forwarding, leave TorrentGo's inbound UDP port commented
 > out — it falls back to outbound-only, which is enough for streaming.
