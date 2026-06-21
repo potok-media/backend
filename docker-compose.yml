@@ -1,45 +1,62 @@
 services:
-  # 🔍 Поисковый движок по трекерам (SearchEngine)
-  potok-searchengine:
-    image: ghcr.io/potok-media/potok-searchengine:main
-    container_name: potok-searchengine
-    restart: unless-stopped
-    ports:
-      - "${SEARCH_ENGINE_PORT:-6000}:${SEARCH_ENGINE_PORT:-6000}"
-    environment:
-      - PORT=${SEARCH_ENGINE_PORT:-6000}
-      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
-    volumes:
-      - ./config.yml:/app/config.local.yml
-
-  # 🌐 BFF (Gateway)
+  # 🌐 API gateway / BFF (Gateway)
   potok-gateway:
-    image: ghcr.io/potok-media/potok-gateway:main
+    image: ghcr.io/potok-media/potok-gateway:latest
     container_name: potok-gateway
     restart: unless-stopped
     ports:
       - "${GATEWAY_PORT:-5000}:${GATEWAY_PORT:-5000}"
     environment:
       - PORT=${GATEWAY_PORT:-5000}
-      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+      # Connection string is assembled from the DB_* parts (single source of truth).
+      - ConnectionStrings__DefaultConnection=Host=${DB_HOST:-db};Port=${DB_PORT:-5432};Database=${DB_NAME:-potok};Username=${DB_USER:-potok};Password=${DB_PASSWORD:-potok};Timeout=30;CommandTimeout=60;
       - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY}
-      - Gateway__DefaultSearchEngineUrl=${GATEWAY_SEARCH_ENGINE_URL:-http://potok-searchengine:6000}
       - Gateway__MultiUserMode=${GATEWAY_MULTI_USER_MODE:-false}
     depends_on:
-      - potok-searchengine
+      db:
+        condition: service_healthy
 
-  # 💻 Веб-клиент Potok (Frontend)
-  potok-web:
-    image: ghcr.io/potok-media/potok-web:main
-    container_name: potok-web
+  # 🔍 Tracker search engine (SearchEngine)
+  potok-searchengine:
+    image: ghcr.io/potok-media/potok-searchengine:latest
+    container_name: potok-searchengine
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-3000}:80"
+      - "${SEARCH_ENGINE_PORT:-6000}:${SEARCH_ENGINE_PORT:-6000}"
     environment:
-      - VITE_DEFAULT_BFF_URL=${VITE_DEFAULT_BFF_URL}
-      - VITE_BLOCK_SETTINGS_INPUT=${VITE_BLOCK_SETTINGS_INPUT:-false}
+      - PORT=${SEARCH_ENGINE_PORT:-6000}
+      - ConnectionStrings__DefaultConnection=Host=${DB_HOST:-db};Port=${DB_PORT:-5432};Database=${DB_NAME:-potok};Username=${DB_USER:-potok};Password=${DB_PASSWORD:-potok};Timeout=30;CommandTimeout=60;
+    volumes:
+      # Mount the tracker config so it can be edited on the host without rebuilding.
+      - ./config.yml:/app/config.local.yml
     depends_on:
-      - potok-gateway
+      db:
+        condition: service_healthy
+
+  # 🌊 BitTorrent streaming engine (TorrentGo)
+  potok-torrentgo:
+    image: ghcr.io/potok-media/potok-torrentgo:latest
+    container_name: potok-torrentgo
+    restart: unless-stopped
+    ports:
+      - "${TORRENTGO_PORT:-5282}:${TORRENTGO_PORT:-5282}"
+      # ------------------------------------------------------------------------
+      # Inbound BitTorrent connections (DHT / peer listen port)
+      # ------------------------------------------------------------------------
+      # - "55123:55123/udp"
+      #
+      # 💡 NOTE FOR NAT / TAILSCALE SETUPS:
+      # If your server sits behind NAT without port forwarding, or is reached over Tailscale,
+      # inbound UDP connections from the public BitTorrent network can't reach the container
+      # directly. In that case this mapping is useless and should stay COMMENTED OUT.
+      # TorrentGo automatically falls back to outbound-only connections, which is more than
+      # enough for stable downloading and media streaming.
+      # ------------------------------------------------------------------------
+    environment:
+      - PORT=${TORRENTGO_PORT:-5282}
+
+  # 🗄️ PostgreSQL (bundled — required by Gateway and SearchEngine).
+  # To use an external/shared database instead, point DB_HOST at it and remove this service.
   db:
     image: postgres:16-alpine
     container_name: potok-db
@@ -51,7 +68,7 @@ services:
     expose:
       - "5432"
     ports:
-      - ${DB_PORT:-5432}:5432
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - potok-db:/var/lib/postgresql/data
     healthcheck:
@@ -64,5 +81,5 @@ services:
       start_period: 30s
 
 volumes:
-  potok-db: null
-
+  potok-db:
+    name: potok_db

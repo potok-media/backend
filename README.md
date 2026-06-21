@@ -1,119 +1,82 @@
-# Potok Backend 🌊
+<div align="center">
+  <img src="./.github/assets/logo.svg" alt="Potok" width="120" />
 
-Добро пожаловать в репозиторий бэкенда проекта **Potok**. Здесь находятся исходный код, конфигурационные файлы и инструменты для докеризации и развёртывания всех трёх микросервисов:
-1. **Gateway** (BFF, ASP.NET Core) — API-шлюз и точка входа для клиентов.
-2. **SearchEngine** (ASP.NET Core) — Движок поиска по торрент-трекерам.
-3. **TorrentGo** (Go) — Стриминговый движок на базе BitTorrent.
+  <h1>Potok Backend</h1>
 
----
+  **English** · [Русский](./README.ru.md)
 
-## 🛠️ Архитектура развёртывания (Docker)
+  ![ASP.NET Core](https://img.shields.io/badge/ASP.NET_Core-512bd4?logo=dotnet&logoColor=white)
+  ![Go](https://img.shields.io/badge/Go-00add8?logo=go&logoColor=white)
+  ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169e1?logo=postgresql&logoColor=white)
+  ![Image](https://img.shields.io/badge/ghcr.io-potok--media-181717?logo=docker&logoColor=white)
+</div>
 
-Все сервисы упакованы в легковесные контейнеры с поддержкой многоэтапной сборки (Multi-stage builds) для минимизации размера образов. Настройки портов и секреты отделены от кода и конфигурируются через переменные окружения.
+Server side of the **Potok** media service — three microservices behind a single API:
 
-### Схема взаимодействия:
+- **Gateway** (BFF, ASP.NET Core) — client entry point, auth, TMDB/Trakt proxy, orchestration.
+- **SearchEngine** (ASP.NET Core) — torrent search across trackers.
+- **TorrentGo** (Go) — BitTorrent streaming engine.
+
+Gateway and SearchEngine share one PostgreSQL (separate schemas); TorrentGo is stateless.
+Engine addresses are managed by an external plugin, not by env.
+
+## Architecture
+
 ```mermaid
-graph TD
-    Client[Клиент / UI] -->|Порт 5000| Gateway[potok-gateway]
-    Gateway -->|Внутренний DNS:6000| SearchEngine[potok-searchengine]
-    Gateway -->|Внутренний DNS:5282| TorrentGo[potok-torrentgo]
-    SearchEngine -->|Внешний IP / Tailscale| Postgres[(PostgreSQL DB)]
-    Gateway -->|Внешний IP / Tailscale| Postgres
+flowchart LR
+    Client["Web client"] --> GW["potok-gateway<br/>:5000"]
+    GW --> SE["potok-searchengine<br/>:6000"]
+    GW --> TG["potok-torrentgo<br/>:5282"]
+    GW --> DB[("PostgreSQL")]
+    SE --> DB
 ```
 
----
+## Quick start (Docker)
 
-## 🚀 Быстрый запуск с Docker Compose
-
-Для локального запуска всей связки бэкенда выполните следующие шаги:
-
-### 1. Подготовка конфигурации
-В корне папки `backend/Potok.Backend` скопируйте шаблон переменного окружения `.env.example` в `.env`:
 ```bash
-cp .env.example .env
-```
-Убедитесь, что параметры в `.env` заполнены (по умолчанию файл `.env` предзаполнен только стандартными портами, а строку подключения к базе данных `DATABASE_URL` и API-ключ `GATEWAY_TMDB_API_KEY` вам необходимо указать самостоятельно).
-
-### 2. Сборка и запуск контейнеров
-Запустите все сервисы одной командой:
-```bash
+cp .env.example .env          # fill GATEWAY_TMDB_API_KEY and DB credentials
 docker compose up -d --build
 ```
 
----
+This brings up all three services and a PostgreSQL instance. PostgreSQL is **required**; to
+use an external/shared one, set `DB_HOST` and remove the bundled `db` service from
+`docker-compose.yml`.
 
-## 📄 Конфигурация `docker-compose.yml`
+## Services & ports
 
-Ниже представлен готовый конфигурационный файл `docker-compose.yml`, находящийся в корневой директории бэкенда:
+| Service | Stack | Default port |
+|---|---|---|
+| `potok-gateway` | ASP.NET Core | `5000` |
+| `potok-searchengine` | ASP.NET Core | `6000` |
+| `potok-torrentgo` | Go | `5282` |
+| `db` (bundled) | PostgreSQL 16 | `5432` |
 
-```yaml
-services:
-  # 🌊 Стриминговый движок BitTorrent (TorrentGo)
-  potok-torrentgo:
-    image: ghcr.io/potok-media/potok-torrentgo:main
-    container_name: potok-torrentgo
-    restart: unless-stopped
-    ports:
-      - "${TORRENTGO_PORT:-5282}:${TORRENTGO_PORT:-5282}"
-      # ------------------------------------------------------------------------
-      # Входящие BitTorrent подключения (DHT/Peer listen port)
-      # ------------------------------------------------------------------------
-      # - "55123:55123/udp"
-      #
-      # 💡 ПРИМЕЧАНИЕ ДЛЯ ТЕХ, КТО ЗА NAT / TAILSCALE:
-      # Если ваш сервер находится за NAT без проброса портов или подключен через Tailscale,
-      # входящие UDP-подключения из внешней сети BitTorrent не смогут дойти напрямую до контейнера.
-      # В таком случае этот маппинг бесполезен и должен быть ЗАКОММЕНТИРОВАН.
-      # Клиент TorrentGo автоматически перейдет в режим исходящих соединений (outbound-only),
-      # чего абсолютно достаточно для стабильного скачивания и стриминга медиафайлов.
-      # ------------------------------------------------------------------------
-    environment:
-      - PORT=${TORRENTGO_PORT:-5282}
-    volumes:
-      - torrent-cache:/app/torrent-cache
+## Configuration
 
-  # 🔍 Поисковый движок по трекерам (SearchEngine)
-  potok-searchengine:
-    image: ghcr.io/potok-media/potok-searchengine:main
-    container_name: potok-searchengine
-    restart: unless-stopped
-    ports:
-      - "${SEARCH_ENGINE_PORT:-6000}:${SEARCH_ENGINE_PORT:-6000}"
-    environment:
-      - PORT=${SEARCH_ENGINE_PORT:-6000}
-      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
-    volumes:
-      # Монтируем файл конфигурации трекеров для редактирования прямо на хосте без пересборки
-      - ./config.yml:/app/config.local.yml
+Set via `.env`. The DB connection string is assembled in `docker-compose.yml` from the
+`DB_*` parts, so there is no separate `DATABASE_URL` to keep in sync.
 
-  # 🌐 API-шлюз и BFF (Gateway)
-  potok-gateway:
-    image: ghcr.io/potok-media/potok-gateway:main
-    container_name: potok-gateway
-    restart: unless-stopped
-    ports:
-      - "${GATEWAY_PORT:-5000}:${GATEWAY_PORT:-5000}"
-    environment:
-      - PORT=${GATEWAY_PORT:-5000}
-      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
-      - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY}
-      - Gateway__DefaultSearchEngineUrl=${GATEWAY_SEARCH_ENGINE_URL:-http://potok-searchengine:6000}
-      - Gateway__DefaultTorrServerUrl=${GATEWAY_TORRSERVER_URL:-http://potok-torrentgo:5282}
-    depends_on:
-      - potok-searchengine
-      - potok-torrentgo
+| Variable | Description | Default |
+|---|---|---|
+| `GATEWAY_TMDB_API_KEY` | TMDB API key (required) | — |
+| `GATEWAY_MULTI_USER_MODE` | Allow self-registration of new users | `false` |
+| `DB_HOST` / `DB_PORT` | PostgreSQL host/port (`db` = bundled container) | `db` / `5432` |
+| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Database name and credentials | `potok` / `potok` / — |
+| `GATEWAY_PORT` / `SEARCH_ENGINE_PORT` / `TORRENTGO_PORT` | Service ports | `5000` / `6000` / `5282` |
 
-volumes:
-  torrent-cache:
-    name: potok_torrent_cache
-```
+Tracker lists for SearchEngine are mounted from `./config.yml` and can be edited on the host
+without rebuilding.
 
----
+> [!NOTE]
+> Behind NAT/Tailscale without port forwarding, leave TorrentGo's inbound UDP port commented
+> out — it falls back to outbound-only, which is enough for streaming.
 
-## 🔒 Переменные окружения и Конфигурация (.env)
+## Part of Potok
 
-Мы применили гибридный подход конфигурации в духе методологии Cloud-Native:
-1. **Переменные окружения** инжектируют секреты, порты и адреса баз данных. Нативная интеграция в `.NET Core` позволяет переопределять ключи конфигурации с разделителем `__` (двойное подчёркивание) — например, `Gateway__TmdbApiKey` переопределит значение секции `Gateway:TmdbApiKey` в `appsettings.json`.
-2. **Файлы конфигураций логики** (такие как `config.local.yml` для поискового движка) монтируются прямо внутрь контейнера через `volumes`. Вы можете спокойно редактировать списки трекеров или настройки кэширования на хост-машине без перезапуска и пересборки Docker-образов!
+The backend powers the **Potok** ecosystem:
 
+- ⚙️ **Backend** — this repository (Gateway · SearchEngine · TorrentGo)
+- 🌐 **Web** — client
+- 🧩 **Plugins & SDK** — extend clients via `PotokSDK`
 
+🔗 [Live](https://potok.rip) · [Wiki](https://potok.rip/wiki) · [GitHub](https://github.com/potok-media)
