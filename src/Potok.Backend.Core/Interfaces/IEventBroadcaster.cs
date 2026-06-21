@@ -1,10 +1,11 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+
 namespace Potok.Backend.Core.Interfaces;
 
 public interface IEventBroadcaster
 {
-    void Publish<T>(string eventName, T data);
-    IAsyncEnumerable<EventEnvelope> Subscribe(Guid clientId, CancellationToken cancellationToken);
-    void Unsubscribe(Guid clientId);
+    void Publish<T>(string eventName, T data, Guid? userId = null);
 }
 
-public record EventEnvelope(string Event, string Data, DateTime Timestamp);

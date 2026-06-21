@@ -26,14 +26,17 @@ public class HomeService : IHomeService
     }
 
     public async Task<HomeResponse> GetHomeFeedAsync(
-        string? cursor = null, 
         string? baseUrl = null, 
         string posterSize = "w780", 
         string backdropSize = "w1280", 
         string logoSize = "original")
     {
+        List<RowDefinition> targetRowDefinitions = RowDefinitions;
+        string? nextCursor = null;
+        bool fetchHero = true;
+
         // 1. Start fetching rows in parallel
-        var rowsTasks = RowDefinitions.Select(async def =>
+        var rowsTasks = targetRowDefinitions.Select(async def =>
         {
             try
             {
@@ -100,7 +103,7 @@ public class HomeService : IHomeService
             }
         }
         
-        var heroTask = GetHeroItemsInternalAsync();
+        var heroTask = fetchHero ? GetHeroItemsInternalAsync() : Task.FromResult(Enumerable.Empty<HeroItem>());
 
         // Wait for both tracks to complete
         await Task.WhenAll(allRowsTask, heroTask);
@@ -108,7 +111,7 @@ public class HomeService : IHomeService
         var rows = (await allRowsTask).Where(r => r != null).Cast<MediaRow>();
         var heroItems = await heroTask;
 
-        return new HomeResponse(heroItems, rows, null);
+        return new HomeResponse(heroItems, rows, nextCursor);
     }
 
     private record RowDefinition(string Id, string Title, string Path, string MediaType);

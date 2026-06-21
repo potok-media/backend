@@ -1,44 +1,55 @@
-using System.Collections.Concurrent;
-using System.Threading.Channels;
+using System;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.SignalR;
 using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Infrastructure.Gateway.Hubs;
 
 namespace Potok.Backend.Infrastructure.Gateway.Services;
 
 public class EventBroadcaster : IEventBroadcaster
 {
-    private readonly ConcurrentDictionary<Guid, Channel<EventEnvelope>> _subscribers = new();
+    private readonly IHubContext<EventsHub> _hubContext;
 
-    public void Publish<T>(string eventName, T data)
+    public EventBroadcaster(IHubContext<EventsHub> hubContext)
     {
-        var json = System.Text.Json.JsonSerializer.Serialize(data);
-        var envelope = new EventEnvelope(eventName, json, DateTime.UtcNow);
+        _hubContext = hubContext;
+    }
 
-        foreach (var channel in _subscribers.Values)
+    public void Publish<T>(string eventName, T data, Guid? userId = null)
+    {
+        var frame = new
         {
-            // Non-blocking try write to each subscriber's channel
-            channel.Writer.TryWrite(envelope);
+            @event = eventName,
+            payload = data,
+            timestamp = DateTime.UtcNow.ToString("o"),
+            version = "1.0",
+            traceId = Guid.NewGuid().ToString()
+        };
+
+        if (userId.HasValue)
+        {
+            var userKey = userId.Value.ToString();
+            // Send specifically to the group for this user
+            _hubContext.Clients.Group(userKey).SendAsync("ReceiveEvent", frame)
+                .ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                    {
+                        Serilog.Log.Error(t.Exception, "Error broadcasting event {Event} to user {UserId}", eventName, userId);
+                    }
+                }, TaskScheduler.Default);
         }
-    }
-
-    public IAsyncEnumerable<EventEnvelope> Subscribe(Guid clientId, CancellationToken cancellationToken)
-    {
-        var channel = Channel.CreateUnbounded<EventEnvelope>(new UnboundedChannelOptions
+        else
         {
-            SingleReader = true,
-            SingleWriter = true
-        });
-
-        _subscribers.TryAdd(clientId, channel);
-        cancellationToken.Register(() => Unsubscribe(clientId));
-
-        return channel.Reader.ReadAllAsync(cancellationToken);
-    }
-
-    public void Unsubscribe(Guid clientId)
-    {
-        if (_subscribers.TryRemove(clientId, out var channel))
-        {
-            channel.Writer.TryComplete();
+            // Send to the global group (which includes both anonymous and authenticated connections)
+            _hubContext.Clients.Group("global").SendAsync("ReceiveEvent", frame)
+                .ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                    {
+                        Serilog.Log.Error(t.Exception, "Error broadcasting event {Event} globally", eventName);
+                    }
+                }, TaskScheduler.Default);
         }
     }
 }

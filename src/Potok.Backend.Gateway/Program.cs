@@ -55,6 +55,7 @@ builder.Host.UseSerilog(Log.Logger, dispose: true);
 
 builder.Services.AddSharedInfrastructure(builder.Configuration);
 builder.Services.AddGatewayInfrastructure(builder.Configuration);
+builder.Services.AddSignalR();
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -149,5 +150,6 @@ using (var scope = app.Services.CreateScope())
 
 app.MapGet("/health", () => Results.Ok());
 app.MapControllers();
+app.MapHub<Potok.Backend.Infrastructure.Gateway.Hubs.EventsHub>("/api/events");
 
 app.Run();

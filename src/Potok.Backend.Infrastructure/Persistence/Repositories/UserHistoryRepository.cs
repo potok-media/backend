@@ -61,31 +61,16 @@ public class UserHistoryRepository : IUserHistoryRepository
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync();
-        var sql = $@"
-            INSERT INTO {Schema}.user_history 
-                (id, user_id, tmdb_id, media_type, season_number, episode_number, progress_seconds, duration_seconds, last_watched_at) 
-            VALUES 
-                (@Id, @UserId, @TmdbId, @MediaType, @SeasonNumber, @EpisodeNumber, @ProgressSeconds, @DurationSeconds, @LastWatchedAt)
-            ON CONFLICT (user_id, tmdb_id, media_type) 
-            DO UPDATE SET 
-                progress_seconds = EXCLUDED.progress_seconds,
-                duration_seconds = EXCLUDED.duration_seconds,
-                last_watched_at = EXCLUDED.last_watched_at,
-                season_number = EXCLUDED.season_number,
-                episode_number = EXCLUDED.episode_number";
-        
-        // Note: For ON CONFLICT to work properly with nullable season/episode, we have the unique index
-        // or we can delete and re-insert if needed, but since we defined a unique constraint or index:
-        // Let's check our index ix_user_history_user_media (not unique).
-        // Let's do a safe Upsert approach: First try to update, if 0 rows affected, insert.
-        // Or we can delete first, then insert! That is a 100% robust and clean way to avoid composite null uniqueness issues in Postgres!
         
         await using var transaction = await connection.BeginTransactionAsync();
         try
         {
+            // Delete only the exact matching entry (specific episode or movie) before inserting
             var deleteSql = $@"
                 DELETE FROM {Schema}.user_history 
-                WHERE user_id = @UserId AND tmdb_id = @TmdbId AND media_type = @MediaType";
+                WHERE user_id = @UserId AND tmdb_id = @TmdbId AND media_type = @MediaType
+                  AND (season_number = @SeasonNumber OR (season_number IS NULL AND @SeasonNumber IS NULL))
+                  AND (episode_number = @EpisodeNumber OR (episode_number IS NULL AND @EpisodeNumber IS NULL))";
             await connection.ExecuteAsync(deleteSql, history, transaction);
 
             var insertSql = $@"
@@ -108,11 +93,20 @@ public class UserHistoryRepository : IUserHistoryRepository
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync();
+        
         var sql = $@"
             DELETE FROM {Schema}.user_history 
-            WHERE user_id = @UserId AND tmdb_id = @TmdbId AND media_type = @MediaType 
-              AND (season_number IS NULL OR season_number = @Season)
-              AND (episode_number IS NULL OR episode_number = @Episode)";
+            WHERE user_id = @UserId AND tmdb_id = @TmdbId AND media_type = @MediaType";
+            
+        if (season.HasValue)
+        {
+            sql += " AND season_number = @Season";
+        }
+        if (episode.HasValue)
+        {
+            sql += " AND episode_number = @Episode";
+        }
+
         await connection.ExecuteAsync(sql, new
         {
             UserId = userId,

@@ -49,12 +49,11 @@ public class MediaController : ControllerBase
 
     [HttpGet("home")]
     public async Task<IActionResult> GetHome(
-        [FromQuery] string? cursor = null,
         [FromQuery] string posterSize = "w780",
         [FromQuery] string backdropSize = "original",
         [FromQuery] string logoSize = "original")
     {
-        var result = await _homeService.GetHomeFeedAsync(cursor, BaseUrl, posterSize, backdropSize, logoSize);
+        var result = await _homeService.GetHomeFeedAsync(BaseUrl, posterSize, backdropSize, logoSize);
         return Ok(result);
     }
 
