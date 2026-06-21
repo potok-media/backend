@@ -74,13 +74,11 @@ builder.WebHost.UseKestrel((context, kestrelOptions) =>
     var serverOpts = context.Configuration.Get<Config>() ?? new Config();
 
     var listenIp = serverOpts.ListenIp;
-    var port = serverOpts.ListenPort;
 
+    // Port comes solely from the PORT env var (set in docker-compose), with a sane default —
+    // no duplicate knob in config.yml.
     var envPort = Environment.GetEnvironmentVariable("PORT");
-    if (!string.IsNullOrEmpty(envPort) && int.TryParse(envPort, out var parsedPort))
-    {
-        port = parsedPort;
-    }
+    var port = int.TryParse(envPort, out var parsedPort) ? parsedPort : 6000;
 
     var ip = listenIp.Equals("any", StringComparison.OrdinalIgnoreCase)
         ? IPAddress.Any

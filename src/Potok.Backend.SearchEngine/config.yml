@@ -1,6 +1,5 @@
 ##### настройка сервера
 listen-ip: any
-listen-port: 8081
 api-key: ''
 web: true
 

@@ -168,7 +168,6 @@ cp src/Potok.Backend.SearchEngine/config.yml ./config.yml   # then edit trackers
 ```yaml
 ##### Server
 listen-ip: any
-listen-port: 8081
 api-key: ''
 web: true
 

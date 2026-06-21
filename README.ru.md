@@ -166,7 +166,6 @@ cp src/Potok.Backend.SearchEngine/config.yml ./config.yml   # затем нас�
 ```yaml
 ##### настройка сервера
 listen-ip: any
-listen-port: 8081
 api-key: ''
 web: true
 
