@@ -16,12 +16,6 @@ public class Config
     public string ListenIp { get; set; } = "any";
 
     /// <summary>
-    ///     Порт для запуска веб-сервера.
-    /// </summary>
-    [ConfigurationKeyName("listen-port")]
-    public int ListenPort { get; set; } = 9117;
-
-    /// <summary>
     ///     API-ключ для защиты доступа к методам API.
     ///     Если не задан, доступ открыт (или ограничен другими способами).
     /// </summary>
