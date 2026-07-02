@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System;
 using System.IO;
@@ -14,6 +15,7 @@ using System.Buffers;
 namespace Potok.Backend.Gateway.Controllers;
 
 [ApiController]
+[AllowAnonymous]
 public class ProxyController : ControllerBase
 {
     private readonly IHttpClientFactory _httpClientFactory;

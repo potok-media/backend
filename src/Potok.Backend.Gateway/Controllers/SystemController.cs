@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using Potok.Backend.Infrastructure.Configuration;
@@ -14,6 +15,7 @@ public class SystemController : ControllerBase
         _options = options;
     }
 
+    [AllowAnonymous]
     [HttpGet("api/handshake")]
     public IActionResult Handshake()
     {

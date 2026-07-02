@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using Potok.Backend.Infrastructure.Configuration;
@@ -45,6 +46,7 @@ public class TmdbProxyController : ControllerBase
         return File(content, response.Content.Headers.ContentType?.ToString() ?? "application/json");
     }
 
+    [AllowAnonymous]
     [HttpGet("media/tmdb/{*path}")]
     [ResponseCache(Duration = 2592000, Location = ResponseCacheLocation.Any, NoStore = false)]
     public async Task<IActionResult> ProxyMedia(string path)

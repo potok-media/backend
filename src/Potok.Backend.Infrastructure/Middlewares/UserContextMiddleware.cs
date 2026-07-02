@@ -1,6 +1,7 @@
 using System;
 using System.Security.Claims;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Interfaces;
@@ -20,17 +21,9 @@ public class UserContextMiddleware
     public async Task InvokeAsync(HttpContext context, IJwtTokenService jwtTokenService, IUserRepository userRepository, IOptions<GatewayOptions> options)
     {
         var gatewayOptions = options.Value;
-        var path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
 
-        if (path.StartsWith("/api/handshake") || 
-            path.StartsWith("/api/auth/login") || 
-            path.StartsWith("/api/health") || 
-            path.StartsWith("/health") || 
-            path.StartsWith("/api/events") || 
-            path.StartsWith("/media/tmdb") || 
-            path.StartsWith("/api/media") || 
-            path.StartsWith("/api/proxy") || 
-            (path.StartsWith("/api/auth/register") && gatewayOptions.MultiUserMode))
+        var endpoint = context.GetEndpoint();
+        if (endpoint?.Metadata.GetMetadata<IAllowAnonymous>() != null)
         {
             await _next(context);
             return;

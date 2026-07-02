@@ -1,3 +1,13 @@
+# Plugin-bundler build stage — a tiny Go sidecar (esbuild) baked into this image.
+# It is internal-only (loopback) and launched/owned by the gateway at runtime.
+FROM golang:1.23-alpine AS bundler-build
+WORKDIR /bundler
+RUN apk add --no-cache git
+COPY ["src/Potok.Backend.PluginBundler/go.mod", "src/Potok.Backend.PluginBundler/go.sum", "./"]
+RUN go mod download
+COPY src/Potok.Backend.PluginBundler/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /out/potok-plugin-bundler .
+
 # Build stage
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
@@ -21,7 +31,11 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
 COPY --from=build /app/publish .
 
-# Default ASP.NET Core port
+# Internal plugin-bundler sidecar binary (loopback-only, started by the gateway).
+COPY --from=bundler-build /out/potok-plugin-bundler /app/potok-plugin-bundler
+RUN chmod +x /app/potok-plugin-bundler
+
+# Default ASP.NET Core port (only the gateway is exposed; the bundler never is).
 ENV PORT=5000
 EXPOSE 5000
 

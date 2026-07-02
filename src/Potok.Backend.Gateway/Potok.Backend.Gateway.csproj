@@ -21,4 +21,16 @@
       <ProjectReference Include="..\Potok.Backend.Infrastructure\Potok.Backend.Infrastructure.csproj" />
     </ItemGroup>
 
+    <!--
+      Local-dev convenience: build the Go plugin-bundler and drop it next to the gateway so
+      `dotnet run` has it (the supervised sidecar). Debug-only so Release/Docker builds — which
+      have no Go toolchain and build the bundler in their own Dockerfile stage — are untouched.
+      ContinueOnError so a machine without Go still builds (bundling just stays disabled).
+    -->
+    <Target Name="BuildPluginBundlerForDev" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
+      <Exec Command="go build -ldflags=&quot;-w -s&quot; -o &quot;$(OutDir)potok-plugin-bundler&quot; ."
+            WorkingDirectory="$(MSBuildProjectDirectory)/../Potok.Backend.PluginBundler"
+            ContinueOnError="true" />
+    </Target>
+
 </Project>

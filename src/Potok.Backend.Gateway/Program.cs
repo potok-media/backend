@@ -26,9 +26,9 @@ var cleanTheme = new AnsiConsoleTheme(new Dictionary<ConsoleThemeStyle, string>
 });
 
 Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Information()
-    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
-    .MinimumLevel.Override("System", LogEventLevel.Warning)
+    //.MinimumLevel.Information()
+    //.MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+    //.MinimumLevel.Override("System", LogEventLevel.Warning)
     .Filter.ByExcluding(logEvent => 
         logEvent.Properties.TryGetValue("RequestPath", out var path) && 
         path.ToString().Contains("health") &&
@@ -56,6 +56,16 @@ builder.Host.UseSerilog(Log.Logger, dispose: true);
 builder.Services.AddSharedInfrastructure(builder.Configuration);
 builder.Services.AddGatewayInfrastructure(builder.Configuration);
 builder.Services.AddSignalR();
+
+// Internal plugin-bundler sidecar: supervised child process + loopback-only client.
+// Hidden, hardcoded, never exposed — see Services/PluginBundlerConstants.cs.
+builder.Services.AddHostedService<Potok.Backend.Gateway.Services.PluginBundlerHost>();
+builder.Services.AddHttpClient(Potok.Backend.Gateway.Services.PluginBundlerConstants.HttpClientName, client =>
+{
+    client.BaseAddress = new Uri(Potok.Backend.Gateway.Services.PluginBundlerConstants.BaseAddress);
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -116,6 +126,7 @@ app.Use(async (context, next) =>
 });
 
 app.UseResponseCaching();
+app.UseRouting();
 app.UseMiddleware<Potok.Backend.Infrastructure.Middlewares.UserContextMiddleware>();
 app.UseAuthorization();
 
@@ -148,8 +159,8 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-app.MapGet("/health", () => Results.Ok());
+app.MapGet("/health", () => Results.Ok()).AllowAnonymous();
 app.MapControllers();
-app.MapHub<Potok.Backend.Infrastructure.Gateway.Hubs.EventsHub>("/api/events");
+app.MapHub<Potok.Backend.Infrastructure.Gateway.Hubs.EventsHub>("/api/events").AllowAnonymous();
 
 app.Run();

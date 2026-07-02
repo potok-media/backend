@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models;
@@ -8,6 +9,7 @@ using System.Text.Json;
 namespace Potok.Backend.Gateway.Controllers;
 
 [ApiController]
+[AllowAnonymous]
 [Route("api/media")]
 public class MediaController : ControllerBase
 {

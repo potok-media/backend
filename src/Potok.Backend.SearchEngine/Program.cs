@@ -44,9 +44,9 @@ var cleanTheme = new AnsiConsoleTheme(new Dictionary<ConsoleThemeStyle, string>
 });
 
 Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Information()
-    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
-    .MinimumLevel.Override("System", LogEventLevel.Warning)
+    //.MinimumLevel.Information()
+    //.MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+    //.MinimumLevel.Override("System", LogEventLevel.Warning)
     .Filter.ByExcluding(logEvent => 
         logEvent.Properties.TryGetValue("RequestPath", out var path) && 
         path.ToString().Contains("health") &&
