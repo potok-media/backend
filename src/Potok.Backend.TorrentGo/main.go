@@ -156,6 +156,7 @@ func main() {
 			r.Get("/{hash}/files/{fileIndex}/metadata", hCtx.HandleGetMediaMetadata)
 			r.Get("/{hash}/files/{fileIndex}/thumbnail", hCtx.HandleGetThumbnail)
 			r.Get("/{hash}/files/{fileIndex}/subtitles/{trackIndex}", hCtx.HandleGetSubtitles)
+			r.Get("/{hash}/files/{fileIndex}/keyframe", hCtx.HandleGetKeyframe)
 
 			// RESTful Streaming sub-routes
 			r.Get("/{hash}/files/{fileIndex}/stream", hCtx.HandleStream)
@@ -168,6 +169,7 @@ func main() {
 		r.Get("/stream/{hash}/{fileIndex}", hCtx.HandleStream)
 		r.Get("/stream/{hash}/{fileIndex}/{filename}", hCtx.HandleStream)
 		r.Get("/stream/{hash}/{fileIndex}/subtitles/{trackIndex}", hCtx.HandleGetSubtitles)
+		r.Get("/stream/{hash}/{fileIndex}/keyframe", hCtx.HandleGetKeyframe)
 		r.Head("/stream/{hash}/{fileIndex}", hCtx.HandleStream)
 		r.Head("/stream/{hash}/{fileIndex}/{filename}", hCtx.HandleStream)
 	})

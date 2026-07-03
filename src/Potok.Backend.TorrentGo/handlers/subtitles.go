@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"bytes"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"os/exec"
@@ -62,18 +64,35 @@ func (h *HandlerContext) HandleGetSubtitles(w http.ResponseWriter, r *http.Reque
 	)
 	cmd := exec.CommandContext(r.Context(), "ffmpeg", args...)
 
-	cmd.Stdout = w
+	// Buffer the output so we can attach a content-based ETag and serve conditional
+	// requests. The subtitle content for a given (hash, file, track, format) tuple is
+	// immutable, so aggressive client-side caching makes seeks/replays instant.
+	var out bytes.Buffer
+	cmd.Stdout = &out
 	cmd.Stderr = nil
 
-	if err := cmd.Start(); err != nil {
-		slog.Error("Failed to spawn ffmpeg for subtitles", "error", err)
-		http.Error(w, "ffmpeg spawn failed", http.StatusInternalServerError)
+	if err := cmd.Run(); err != nil {
+		if r.Context().Err() != nil {
+			return // client disconnected, nothing to write
+		}
+		slog.Warn("ffmpeg subtitle extraction completed with error", "error", err)
+		http.Error(w, "subtitle extraction failed", http.StatusInternalServerError)
 		return
 	}
 
-	if err := cmd.Wait(); err != nil {
-		if r.Context().Err() == nil {
-			slog.Warn("ffmpeg subtitle extraction completed with error", "error", err)
-		}
+	data := out.Bytes()
+
+	hsh := fnv.New64a()
+	_, _ = hsh.Write(data)
+	etag := fmt.Sprintf("\"%x\"", hsh.Sum64())
+
+	w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
+	w.Header().Set("ETag", etag)
+
+	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
 	}
+
+	_, _ = w.Write(data)
 }
