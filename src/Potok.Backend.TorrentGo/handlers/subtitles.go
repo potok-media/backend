@@ -17,7 +17,32 @@ func (h *HandlerContext) HandleGetSubtitles(w http.ResponseWriter, r *http.Reque
 
 	streamURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
 
-	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	format := r.URL.Query().Get("format")
+	ffmpegFormat := "webvtt"
+	contentType := "text/vtt; charset=utf-8"
+
+	if format != "" {
+		isAlpha := true
+		for _, r := range format {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+				isAlpha = false
+				break
+			}
+		}
+		if isAlpha && len(format) < 10 {
+			ffmpegFormat = format
+			switch strings.ToLower(format) {
+			case "ass", "ssa":
+				contentType = "text/x-ssa; charset=utf-8"
+			case "srt", "subrip":
+				contentType = "text/srt; charset=utf-8"
+			default:
+				contentType = "text/plain; charset=utf-8"
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
@@ -32,7 +57,7 @@ func (h *HandlerContext) HandleGetSubtitles(w http.ResponseWriter, r *http.Reque
 	args = append(args,
 		"-i", streamURL,
 		"-map", fmt.Sprintf("0:s:%s", trackIndexStr),
-		"-f", "webvtt",
+		"-f", ffmpegFormat,
 		"-",
 	)
 	cmd := exec.CommandContext(r.Context(), "ffmpeg", args...)
