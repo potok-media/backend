@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
 using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models;
@@ -10,25 +11,24 @@ namespace Potok.Backend.Gateway.Controllers;
 public class LibraryController : ControllerBase
 {
     private readonly ILibraryOrchestrator _orchestrator;
+    private readonly IUserRepository _userRepository;
     private readonly ILogger _logger;
 
-    public LibraryController(ILibraryOrchestrator orchestrator, ILogger logger)
+    public LibraryController(ILibraryOrchestrator orchestrator, IUserRepository userRepository, ILogger logger)
     {
         _orchestrator = orchestrator;
+        _userRepository = userRepository;
         _logger = logger;
     }
 
     private string BaseUrl => $"{Request.Scheme}://{Request.Host}";
 
-    private string? GetTraktAccessToken()
+    private async Task<string?> GetTraktAccessTokenAsync()
     {
-        var headerVal = Request.Headers["Trakt-Authorization"].ToString();
-        if (string.IsNullOrEmpty(headerVal)) return null;
-        if (headerVal.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        {
-            return headerVal.Substring("Bearer ".Length).Trim();
-        }
-        return headerVal.Trim();
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId)) return null;
+        var token = await _userRepository.GetTraktTokenAsync(userId);
+        return token?.AccessToken;
     }
 
     [HttpGet("watchlist")]
@@ -43,7 +43,7 @@ public class LibraryController : ControllerBase
     [HttpGet("calendar")]
     public async Task<IActionResult> GetCalendar()
     {
-        var accessToken = GetTraktAccessToken();
+        var accessToken = await GetTraktAccessTokenAsync();
         var results = await _orchestrator.GetCalendarAsync(accessToken, BaseUrl);
         return Ok(results ?? Enumerable.Empty<MediaCard>());
     }
@@ -54,10 +54,10 @@ public class LibraryController : ControllerBase
     [HttpGet("profile")]
     public async Task<IActionResult> GetProfile()
     {
-        var accessToken = GetTraktAccessToken();
+        var accessToken = await GetTraktAccessTokenAsync();
         if (string.IsNullOrEmpty(accessToken))
         {
-            _logger.Warning("Trakt access token not found in request headers when fetching user profile");
+            _logger.Warning("Trakt access token not found for user when fetching user profile");
             return Unauthorized("Trakt not connected");
         }
 
@@ -75,10 +75,10 @@ public class LibraryController : ControllerBase
 
     private async Task<IActionResult> GetLibraryItems(string key, Func<string, string, Task<IEnumerable<MediaCard>>> fetchFunc)
     {
-        var accessToken = GetTraktAccessToken();
+        var accessToken = await GetTraktAccessTokenAsync();
         if (string.IsNullOrEmpty(accessToken))
         {
-            _logger.Warning("Trakt access token not found in request headers when fetching library items");
+            _logger.Warning("Trakt access token not found for user when fetching library items");
             return Unauthorized("Trakt not connected");
         }
 

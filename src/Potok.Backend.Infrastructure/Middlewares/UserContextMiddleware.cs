@@ -22,13 +22,6 @@ public class UserContextMiddleware
     {
         var gatewayOptions = options.Value;
 
-        var endpoint = context.GetEndpoint();
-        if (endpoint?.Metadata.GetMetadata<IAllowAnonymous>() != null)
-        {
-            await _next(context);
-            return;
-        }
-
         var authHeader = context.Request.Headers["Authorization"].ToString();
         ClaimsPrincipal? authenticatedUser = null;
 
@@ -49,6 +42,13 @@ public class UserContextMiddleware
                     }
                 }
             }
+        }
+
+        var endpoint = context.GetEndpoint();
+        if (endpoint?.Metadata.GetMetadata<IAllowAnonymous>() != null)
+        {
+            await _next(context);
+            return;
         }
 
         if (gatewayOptions.AuthRequired)

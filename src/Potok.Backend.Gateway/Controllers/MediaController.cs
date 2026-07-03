@@ -5,6 +5,7 @@ using Potok.Backend.Core.Models;
 using Potok.Backend.Infrastructure.Gateway.Services;
 using ILogger = Serilog.ILogger;
 using System.Text.Json;
+using System.Security.Claims;
 
 namespace Potok.Backend.Gateway.Controllers;
 
@@ -19,14 +20,16 @@ public class MediaController : ControllerBase
     private readonly ILogger _logger;
     private readonly ITorrentRepository _torrentRepository;
     private readonly IEventBroadcaster _eventBroadcaster;
+    private readonly IUserRepository _userRepository;
 
     public MediaController(
-        IHomeService homeService, 
-        IMediaOrchestrator orchestrator, 
-        TmdbClient tmdbClient, 
+        IHomeService homeService,
+        IMediaOrchestrator orchestrator,
+        TmdbClient tmdbClient,
         ILogger logger,
         ITorrentRepository torrentRepository,
-        IEventBroadcaster eventBroadcaster)
+        IEventBroadcaster eventBroadcaster,
+        IUserRepository userRepository)
     {
         _homeService = homeService;
         _orchestrator = orchestrator;
@@ -34,19 +37,17 @@ public class MediaController : ControllerBase
         _logger = logger;
         _torrentRepository = torrentRepository;
         _eventBroadcaster = eventBroadcaster;
+        _userRepository = userRepository;
     }
 
     private string BaseUrl => $"{Request.Scheme}://{Request.Host}";
 
-    private string? GetTraktAccessToken()
+    private async Task<string?> GetTraktAccessTokenAsync()
     {
-        var headerVal = Request.Headers["Trakt-Authorization"].ToString();
-        if (string.IsNullOrEmpty(headerVal)) return null;
-        if (headerVal.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        {
-            return headerVal.Substring("Bearer ".Length).Trim();
-        }
-        return headerVal.Trim();
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId)) return null;
+        var token = await _userRepository.GetTraktTokenAsync(userId);
+        return token?.AccessToken;
     }
 
     [HttpGet("home")]
@@ -65,7 +66,7 @@ public class MediaController : ControllerBase
         long id,
         [FromQuery] bool refresh = false)
     {
-        var accessToken = GetTraktAccessToken();
+        var accessToken = await GetTraktAccessTokenAsync();
 
         _logger.Debug("Fetching media details for {MediaType}/{Id} (refresh={Refresh}, hasToken={HasToken})", mediaType, id, refresh, !string.IsNullOrEmpty(accessToken));
 
@@ -125,7 +126,7 @@ public class MediaController : ControllerBase
             return Ok(Enumerable.Empty<MediaCard>());
         }
 
-        var accessToken = GetTraktAccessToken();
+        var accessToken = await GetTraktAccessTokenAsync();
 
         var tasks = request.Items.Select(async item =>
         {

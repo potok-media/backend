@@ -131,17 +131,11 @@ public class TraktProxyController : ControllerBase
         var requestMessage = new HttpRequestMessage(new HttpMethod(Request.Method), url);
         
         string? accessToken = null;
-        if (Request.Headers.TryGetValue("Trakt-Authorization", out var clientTraktAuth) && !string.IsNullOrEmpty(clientTraktAuth))
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!string.IsNullOrEmpty(userIdStr) && Guid.TryParse(userIdStr, out var userId))
         {
-            var headerVal = clientTraktAuth.ToString();
-            if (headerVal.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            {
-                accessToken = headerVal.Substring("Bearer ".Length).Trim();
-            }
-            else
-            {
-                accessToken = headerVal.Trim();
-            }
+            var token = await _userRepository.GetTraktTokenAsync(userId);
+            accessToken = token?.AccessToken;
         }
 
         if (!string.IsNullOrEmpty(accessToken))

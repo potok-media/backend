@@ -72,7 +72,7 @@ public class AuthController : ControllerBase
                 id = user.Id,
                 username = user.Username,
                 syncStrategy = user.SyncStrategy,
-                traktAccessToken = (string?)null
+                traktConnected = false
             }
         });
     }
@@ -103,7 +103,7 @@ public class AuthController : ControllerBase
                 id = user.Id,
                 username = user.Username,
                 syncStrategy = user.SyncStrategy,
-                traktAccessToken = traktToken?.AccessToken
+                traktConnected = traktToken != null
             }
         });
     }
@@ -130,7 +130,7 @@ public class AuthController : ControllerBase
             id = user.Id,
             username = user.Username,
             syncStrategy = user.SyncStrategy,
-            traktAccessToken = traktToken?.AccessToken
+            traktConnected = traktToken != null
         });
     }
 
