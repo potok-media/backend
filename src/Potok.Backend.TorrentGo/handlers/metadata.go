@@ -38,6 +38,15 @@ func (h *HandlerContext) HandleGetMediaMetadata(w http.ResponseWriter, r *http.R
 	hashHex := chi.URLParam(r, "hash")
 	fileIndexStr := chi.URLParam(r, "fileIndex")
 
+	// Pre-warm HLS: the player fetches metadata as it opens, so build the segmentation (parses the
+	// container keyframe index) and start the producer from seg0 now — the first segments are being
+	// made by the time hls.js requests the playlist.
+	go func() {
+		if sl, err := h.getSegList(context.Background(), hashHex, fileIndexStr); err == nil {
+			h.ensureSessionCovers(context.Background(), hashHex, fileIndexStr, "", sl, 0)
+		}
+	}()
+
 	cacheKey := fmt.Sprintf("%s_%s", hashHex, fileIndexStr)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")

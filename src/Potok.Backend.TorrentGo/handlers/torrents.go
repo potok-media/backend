@@ -37,6 +37,11 @@ type HandlerContext struct {
 	metadataCache     sync.Map // map[string][]byte
 	headersCache      sync.Map // map[string]*FileHeaders
 	metadataSFG       singleflight.Group
+	hlsVideoCodec     sync.Map // map[string]string — cached video codec per file (h264 → copy)
+	hlsVideoStartPTS  sync.Map // map[string]float64 — cached first video PTS (source offset) per file
+	hlsSegList        sync.Map // map[string]*segList — cached VOD segmentation per file
+	hlsSessions       sync.Map // map[string]*hlsSession — one repositionable ffmpeg muxer per (file,audio)
+	hlsReaperOnce     sync.Once
 }
 
 func NewHandlerContext(engine *bt.Engine, sm *speed.Monitor, cfg *config.Config, ts *ThumbnailService) *HandlerContext {
@@ -254,6 +259,8 @@ func (h *HandlerContext) HandleDeleteTorrent(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	copy(infoHash[:], hexBytes)
+
+	h.purgeHlsSessions(hashHex)
 
 	t, ok := h.Engine.Client.Torrent(infoHash)
 	if !ok {
