@@ -29,6 +29,12 @@ import (
 // true source PTS regardless of which run produced it, and `-start_number N` so segment files are
 // named by their absolute index. When a request lands far outside the running muxer's window, the
 // muxer is repositioned to that segment's keyframe.
+//
+// Output is fMP4 (`.m4s` media + a shared `init.mp4`, referenced via #EXT-X-MAP): the codec config
+// (SPS/PPS) lives out-of-band in the init segment, so a segment produced by a mid-stream reposition
+// is decodable even when the source uses open GOPs (its keyframe is a non-IDR I-frame). Plain
+// MPEG-TS copy dropped the parameter sets there → MSE couldn't decode → the picture froze until the
+// next IDR while audio kept going. fMP4 fixes that at the source.
 const (
 	hlsIdleTimeout = 10 * time.Minute
 	// How far ahead of the producer's head a requested segment may be before we reposition instead
@@ -36,18 +42,23 @@ const (
 	// waits for the running muxer, and only genuine far seeks pay for a restart.
 	hlsReloadAhead = 16
 	hlsSegTimeout  = 45 * time.Second
+	// Minimum spacing between producer restarts for one (file,audio). Guards against restart storms
+	// during rapid seeking — a fresh run is given a moment to make progress before it can be torn
+	// down again.
+	hlsRepositionCooldown = 300 * time.Millisecond
 )
 
-var hlsSegmentRe = regexp.MustCompile(`^seg(\d+)\.ts$`)
+var hlsSegmentRe = regexp.MustCompile(`^seg(\d+)\.m4s$`)
 
 type hlsSession struct {
-	mu         sync.Mutex
-	dir        string
-	cancel     context.CancelFunc
-	startSeg   int
-	started    bool
-	lastAccess time.Time
-	head       atomic.Int64 // highest contiguous produced absolute segment index (startSeg-1 = none)
+	mu             sync.Mutex
+	dir            string
+	cancel         context.CancelFunc
+	startSeg       int
+	started        bool
+	lastAccess     time.Time
+	lastReposition time.Time
+	head           atomic.Int64 // highest cached absolute segment index this run produced (startSeg-1 = none)
 }
 
 func (h *HandlerContext) HandleHls(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +66,8 @@ func (h *HandlerContext) HandleHls(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case res == "master.m3u8" || res == "index.m3u8":
 		h.serveHlsPlaylist(w, r)
+	case res == "init.mp4":
+		h.serveHlsInit(w, r)
 	default:
 		if m := hlsSegmentRe.FindStringSubmatch(res); m != nil {
 			n, _ := strconv.Atoi(m[1])
@@ -99,11 +112,13 @@ func renderVodPlaylist(sl *segList, audio string) []byte {
 		}
 	}
 	var b strings.Builder
-	b.WriteString("#EXTM3U\n#EXT-X-VERSION:3\n")
+	b.WriteString("#EXTM3U\n#EXT-X-VERSION:7\n")
 	fmt.Fprintf(&b, "#EXT-X-TARGETDURATION:%d\n", int(math.Ceil(maxDur)))
 	b.WriteString("#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-INDEPENDENT-SEGMENTS\n")
+	// fMP4: the shared init segment carries the codec config for every media segment.
+	fmt.Fprintf(&b, "#EXT-X-MAP:URI=\"init.mp4%s\"\n", q)
 	for i := 0; i < sl.count(); i++ {
-		fmt.Fprintf(&b, "#EXTINF:%.6f,\nseg%d.ts%s\n", sl.extinf(i), i, q)
+		fmt.Fprintf(&b, "#EXTINF:%.6f,\nseg%d.m4s%s\n", sl.extinf(i), i, q)
 	}
 	b.WriteString("#EXT-X-ENDLIST\n")
 	return []byte(b.String())
@@ -120,27 +135,85 @@ func (h *HandlerContext) serveHlsSegment(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	s := h.ensureSessionCovers(r.Context(), hashHex, fileIndexStr, audio, sl, n)
-	if s == nil {
-		http.Error(w, "hls unavailable", http.StatusInternalServerError)
-		return
-	}
-	s.mu.Lock()
-	dir := s.dir
-	s.mu.Unlock()
+	cacheKey := hashHex + "_" + fileIndexStr + "_" + audio + "_" + strconv.Itoa(n)
 
-	data, err := waitForSegment(r.Context(), filepath.Join(dir, fmt.Sprintf("seg%d.ts", n)), hlsSegTimeout)
-	if err != nil {
-		if r.Context().Err() != nil {
+	// Serve from cache first — an already-produced segment comes straight from RAM without touching
+	// the producer, so backward/repeat seeks are free and never restart ffmpeg (the old thrash).
+	data, ok := h.hlsSegCache.get(cacheKey)
+	if !ok {
+		// Miss: ensure a producer is heading to n, then wait for the watcher to cache it.
+		if h.ensureSessionCovers(r.Context(), hashHex, fileIndexStr, audio, sl, n) == nil {
+			http.Error(w, "hls unavailable", http.StatusInternalServerError)
 			return
 		}
-		http.Error(w, "segment not ready", http.StatusGatewayTimeout)
-		return
+		var werr error
+		data, werr = h.waitForCachedSegment(r.Context(), cacheKey, hlsSegTimeout)
+		if werr != nil {
+			if r.Context().Err() != nil {
+				return
+			}
+			http.Error(w, "segment not ready", http.StatusGatewayTimeout)
+			return
+		}
 	}
-	w.Header().Set("Content-Type", "video/mp2t")
+	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
 	_, _ = w.Write(data)
+}
+
+// serveHlsInit answers the fMP4 #EXT-X-MAP init segment (codec config). It's identical for every
+// segment/run of one (file,audio), so it is produced by whatever session exists and cached once.
+func (h *HandlerContext) serveHlsInit(w http.ResponseWriter, r *http.Request) {
+	hashHex := chi.URLParam(r, "hash")
+	fileIndexStr := chi.URLParam(r, "fileIndex")
+	audio := sanitizeAudioParam(r.URL.Query().Get("audio"))
+
+	initKey := hashHex + "_" + fileIndexStr + "_" + audio + "_init"
+	data, ok := h.hlsSegCache.get(initKey)
+	if !ok {
+		sl, err := h.getSegList(r.Context(), hashHex, fileIndexStr)
+		if err != nil {
+			http.Error(w, "hls unavailable", http.StatusInternalServerError)
+			return
+		}
+		if h.ensureSessionCovers(r.Context(), hashHex, fileIndexStr, audio, sl, 0) == nil {
+			http.Error(w, "hls unavailable", http.StatusInternalServerError)
+			return
+		}
+		var werr error
+		data, werr = h.waitForCachedSegment(r.Context(), initKey, hlsSegTimeout)
+		if werr != nil {
+			if r.Context().Err() != nil {
+				return
+			}
+			http.Error(w, "init not ready", http.StatusGatewayTimeout)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
+	_, _ = w.Write(data)
+}
+
+// waitForCachedSegment blocks until the watcher has moved segment `cacheKey` into the byte cache (or
+// the request/timeout ends). Concurrent requests for the same segment all poll the one cache entry.
+func (h *HandlerContext) waitForCachedSegment(ctx context.Context, cacheKey string, timeout time.Duration) ([]byte, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		if data, ok := h.hlsSegCache.get(cacheKey); ok {
+			return data, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("segment timeout")
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // ensureSessionCovers guarantees a producer is running that will emit segment n, repositioning it
@@ -157,6 +230,13 @@ func (h *HandlerContext) ensureSessionCovers(ctx context.Context, hashHex, fileI
 	s.lastAccess = time.Now()
 
 	if s.started && n >= s.startSeg && n <= int(s.head.Load())+hlsReloadAhead {
+		return s
+	}
+
+	// Restart storm guard: if a run was just (re)started, don't tear it down again immediately. When
+	// n is still reachable by the fresh run (n >= startSeg) let the caller wait for it; only a real
+	// backward jump the run can't serve falls through to restart.
+	if s.started && n >= s.startSeg && time.Since(s.lastReposition) < hlsRepositionCooldown {
 		return s
 	}
 
@@ -186,7 +266,8 @@ func (h *HandlerContext) ensureSessionCovers(ctx context.Context, hashHex, fileI
 	s.startSeg = n
 	s.head.Store(int64(n - 1))
 	s.started = true
-	go watchHlsHead(sctx, s, dir, n)
+	s.lastReposition = time.Now()
+	go h.watchHlsHead(sctx, s, dir, key, n)
 	slog.Info("hls producer started", "key", key, "startSeg", n, "transcode", sl.transcode)
 	return s
 }
@@ -234,10 +315,11 @@ func (h *HandlerContext) startHlsProducer(sctx context.Context, hashHex, fileInd
 		"-hls_time", segDur,
 		"-hls_playlist_type", "vod",
 		"-hls_flags", "independent_segments+temp_file",
-		"-hls_segment_type", "mpegts",
+		"-hls_segment_type", "fmp4",
+		"-hls_fmp4_init_filename", "init.mp4",
 		"-hls_list_size", "0",
 		"-start_number", strconv.Itoa(startSeg),
-		"-hls_segment_filename", filepath.Join(dir, "seg%d.ts"),
+		"-hls_segment_filename", filepath.Join(dir, "seg%d.m4s"),
 		filepath.Join(dir, "index.m3u8"),
 	)
 
@@ -249,18 +331,39 @@ func (h *HandlerContext) startHlsProducer(sctx context.Context, hashHex, fileInd
 	return nil
 }
 
-// watchHlsHead advances s.head as contiguous segment files appear, so ensureSessionCovers can tell
-// how far the producer has reached without rescanning on every request.
-func watchHlsHead(ctx context.Context, s *hlsSession, dir string, startSeg int) {
+// watchHlsHead moves each completed segment file into the byte cache and deletes the file, then
+// advances s.head. Serving reads only from the cache, so a segment survives the producer being
+// killed/repositioned, and disk holds only the in-progress segment. The `temp_file` hls flag makes
+// segN.m4s appear atomically (complete) — safe to read+delete.
+func (h *HandlerContext) watchHlsHead(ctx context.Context, s *hlsSession, dir, keyPrefix string, startSeg int) {
 	next := startSeg
+	initCached := false
+	initKey := keyPrefix + "_init"
 	t := time.NewTicker(150 * time.Millisecond)
 	defer t.Stop()
 	for {
+		// The fMP4 init segment (codec config) is written once at start and is identical across
+		// runs of this (file,audio); cache it once so #EXT-X-MAP can be answered from any run.
+		if !initCached {
+			if _, ok := h.hlsSegCache.get(initKey); ok {
+				initCached = true
+			} else if data, err := os.ReadFile(filepath.Join(dir, "init.mp4")); err == nil && len(data) > 0 {
+				h.hlsSegCache.put(initKey, data)
+				initCached = true
+			}
+		}
 		for {
-			fi, err := os.Stat(filepath.Join(dir, fmt.Sprintf("seg%d.ts", next)))
+			path := filepath.Join(dir, fmt.Sprintf("seg%d.m4s", next))
+			fi, err := os.Stat(path)
 			if err != nil || fi.Size() == 0 {
 				break
 			}
+			data, rerr := os.ReadFile(path)
+			if rerr != nil || len(data) == 0 {
+				break
+			}
+			h.hlsSegCache.put(keyPrefix+"_"+strconv.Itoa(next), data)
+			_ = os.Remove(path)
 			s.head.Store(int64(next))
 			next++
 		}
@@ -350,7 +453,7 @@ func (h *HandlerContext) purgeHlsSessions(hashHex string) {
 		}
 		return true
 	})
-	// Drop all per-file caches for this torrent (segmentation, codec, PTS offset).
+	// Drop all per-file caches for this torrent (segmentation, codec, PTS offset, segment bytes).
 	for _, m := range []*sync.Map{&h.hlsSegList, &h.hlsVideoCodec, &h.hlsVideoStartPTS} {
 		m.Range(func(k, _ interface{}) bool {
 			if key, _ := k.(string); strings.HasPrefix(key, prefix) {
@@ -359,6 +462,7 @@ func (h *HandlerContext) purgeHlsSessions(hashHex string) {
 			return true
 		})
 	}
+	h.hlsSegCache.purgePrefix(prefix)
 }
 
 func (h *HandlerContext) reapHlsSessions() {
@@ -403,19 +507,3 @@ func sanitizeAudioParam(a string) string {
 	return a
 }
 
-func waitForSegment(ctx context.Context, path string, timeout time.Duration) ([]byte, error) {
-	deadline := time.Now().Add(timeout)
-	for {
-		if fi, err := os.Stat(path); err == nil && fi.Size() > 0 {
-			return os.ReadFile(path)
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("segment timeout")
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(120 * time.Millisecond):
-		}
-	}
-}

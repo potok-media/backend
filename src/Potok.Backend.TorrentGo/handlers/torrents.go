@@ -41,6 +41,7 @@ type HandlerContext struct {
 	hlsVideoStartPTS  sync.Map // map[string]float64 — cached first video PTS (source offset) per file
 	hlsSegList        sync.Map // map[string]*segList — cached VOD segmentation per file
 	hlsSessions       sync.Map // map[string]*hlsSession — one repositionable ffmpeg muxer per (file,audio)
+	hlsSegCache       segCache // LRU of produced segment bytes — serving source, decoupled from sessions
 	hlsReaperOnce     sync.Once
 }
 
