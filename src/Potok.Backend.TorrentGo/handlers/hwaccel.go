@@ -70,11 +70,12 @@ func (a *hwAccel) videoArgs() []string {
 }
 
 // detectVideoAccel probes hardware H.264 encoders in priority order and returns the first that
-// actually runs a tiny encode on this host. Returns nil (→ software libx264) when none work or when
-// POTOK_DISABLE_HWACCEL is set. Result is computed once and reused for every transcode.
+// actually runs a tiny encode on this host. Opt-in: returns nil (→ software libx264) unless
+// POTOK_HWACCEL is set, because the HW HLS segment/keyframe path still needs on-device verification
+// (some encoders ignore -force_key_frames, misaligning fMP4 segments). Result is cached for reuse.
 func detectVideoAccel(ffmpegPath string) *hwAccel {
-	if os.Getenv("POTOK_DISABLE_HWACCEL") != "" {
-		slog.Info("hwaccel disabled via POTOK_DISABLE_HWACCEL, using software x264")
+	if os.Getenv("POTOK_HWACCEL") == "" {
+		slog.Info("hwaccel opt-in (set POTOK_HWACCEL=1 to enable), using software x264")
 		return nil
 	}
 
