@@ -54,9 +54,10 @@ services:
       # ------------------------------------------------------------------------
     environment:
       - PORT=${TORRENTGO_PORT:-5282}
-    # Hardware transcoding: default maps a harmless no-op device so this works on any host. To enable
-    # GPU acceleration, set GPU_DEVICE=/dev/dri:/dev/dri in your .env (Intel/AMD) — TorrentGo detects
-    # and uses it automatically, or stays on software if absent.
+    # Hardware transcoding: default maps a harmless no-op device so this works on any host. Set
+    # GPU_DEVICE=/dev/dri:/dev/dri in your .env (Intel/AMD) to pass a GPU in — TorrentGo then
+    # auto-detects and uses it (only if it passes a startup probe incl. keyframe alignment), else
+    # stays on software. Force software with POTOK_DISABLE_HWACCEL=1.
     devices:
       - ${GPU_DEVICE:-/dev/null:/dev/null}
 

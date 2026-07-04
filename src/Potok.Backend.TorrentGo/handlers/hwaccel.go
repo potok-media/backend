@@ -69,13 +69,17 @@ func (a *hwAccel) videoArgs() []string {
 	return append(out, a.encArgs...)
 }
 
-// detectVideoAccel probes hardware H.264 encoders in priority order and returns the first that
-// actually runs a tiny encode on this host. Opt-in: returns nil (→ software libx264) unless
-// POTOK_HWACCEL is set, because the HW HLS segment/keyframe path still needs on-device verification
-// (some encoders ignore -force_key_frames, misaligning fMP4 segments). Result is cached for reuse.
+// detectVideoAccel probes hardware H.264 encoders in priority order and returns the first that both
+// runs on this host AND honors -force_key_frames (probeEncoder verifies the encoded output actually
+// splits into keyframe-aligned fMP4 segments — a HW encoder that ignores forced keyframes misaligns
+// segments and is rejected → next candidate / software libx264). Auto-enabled when a valid encoder is
+// present; POTOK_DISABLE_HWACCEL forces software. Result is cached for reuse.
 func detectVideoAccel(ffmpegPath string) *hwAccel {
-	if os.Getenv("POTOK_HWACCEL") == "" {
-		slog.Info("hwaccel opt-in (set POTOK_HWACCEL=1 to enable), using software x264")
+	// Auto-enable HW: the hardened probe below is the safety net that made the old POTOK_HWACCEL opt-in
+	// unnecessary (that flag is gone — a leftover POTOK_HWACCEL=1 in someone's env is simply ignored).
+	// POTOK_DISABLE_HWACCEL is the escape hatch to force software.
+	if os.Getenv("POTOK_DISABLE_HWACCEL") != "" {
+		slog.Info("hwaccel disabled via POTOK_DISABLE_HWACCEL, using software x264")
 		return nil
 	}
 
@@ -91,7 +95,9 @@ func detectVideoAccel(ffmpegPath string) *hwAccel {
 			name:       "nvenc",
 			decodeArgs: []string{"-hwaccel", "cuda"},
 			vf:         "format=yuv420p",
-			encArgs:    []string{"-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "24"},
+			// -forced-idr 1 makes -force_key_frames emit real IDR frames at the segment grid (nvenc
+			// otherwise inserts non-IDR keyframes → fMP4 segments don't tile). Verified by probeEncoder.
+			encArgs: []string{"-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "24", "-forced-idr", "1"},
 		})
 		if dev := findRenderNode(); dev != "" {
 			candidates = append(candidates, &hwAccel{
@@ -99,7 +105,9 @@ func detectVideoAccel(ffmpegPath string) *hwAccel {
 				deviceArgs: []string{"-init_hw_device", "vaapi=va:" + dev, "-filter_hw_device", "va"},
 				decodeArgs: []string{"-hwaccel", "vaapi", "-hwaccel_device", "va"},
 				vf:         "format=nv12,hwupload",
-				encArgs:    []string{"-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "24"},
+				// -forced-idr 1: same as nvenc — h264_vaapi must emit IDR at the forced keyframe grid or
+				// the fMP4 segments a reposition produces won't tile. Verified by probeEncoder.
+				encArgs: []string{"-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "24", "-forced-idr", "1"},
 			})
 		}
 	}
@@ -127,21 +135,51 @@ func findRenderNode() string {
 	return ""
 }
 
-// probeEncoder runs the exact device+filter+encoder shape against a synthetic source; success means
-// the real transcode will initialize on this host.
+// probeEncoder runs the exact device+filter+encoder shape the real producer uses against a synthetic
+// source AND verifies it honors -force_key_frames. It encodes 4s forcing a keyframe every 1s and cuts
+// fMP4 HLS segments on that grid; an encoder that ignores the forcing produces one long GOP → the hls
+// muxer can't split → too few segments → we reject it (that exact misalignment broke fMP4 before and
+// is why HW used to be opt-in). Success means the real transcode both initializes and tiles cleanly.
 func probeEncoder(ffmpegPath string, a *hwAccel) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
+	dir, err := os.MkdirTemp("", "potok-hwprobe-")
+	if err != nil {
+		slog.Debug("hwaccel probe mkdtemp failed", "backend", a.name, "err", err)
+		return false
+	}
+	defer os.RemoveAll(dir)
+
+	const segDur = "1"
 	args := []string{"-hide_banner", "-loglevel", "error"}
 	args = append(args, a.deviceArgs...)
-	args = append(args, "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=10:duration=0.3")
+	args = append(args, "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=15:duration=4")
 	args = append(args, a.videoArgs()...)
-	args = append(args, "-f", "null", "-")
+	args = append(args,
+		"-force_key_frames", "expr:gte(t,n_forced*"+segDur+")",
+		"-an",
+		"-f", "hls",
+		"-hls_time", segDur,
+		"-hls_playlist_type", "vod",
+		"-hls_flags", "independent_segments+temp_file",
+		"-hls_segment_type", "fmp4",
+		"-hls_fmp4_init_filename", "init.mp4",
+		"-hls_list_size", "0",
+		"-hls_segment_filename", filepath.Join(dir, "seg%d.m4s"),
+		filepath.Join(dir, "index.m3u8"),
+	)
 
-	out, err := exec.CommandContext(ctx, ffmpegPath, args...).CombinedOutput()
-	if err != nil {
-		slog.Debug("hwaccel probe failed", "backend", a.name, "err", err, "out", strings.TrimSpace(string(out)))
+	if out, err := exec.CommandContext(ctx, ffmpegPath, args...).CombinedOutput(); err != nil {
+		slog.Debug("hwaccel probe encode failed", "backend", a.name, "err", err, "out", strings.TrimSpace(string(out)))
+		return false
+	}
+
+	// 4s of 1s-forced keyframes should yield ~4 segments; fewer than 3 means the encoder ignored the
+	// forced keyframes (one big GOP) and would misalign real fMP4 segments — reject.
+	segs, _ := filepath.Glob(filepath.Join(dir, "seg*.m4s"))
+	if len(segs) < 3 {
+		slog.Debug("hwaccel probe: forced keyframes not honored", "backend", a.name, "segments", len(segs))
 		return false
 	}
 	return true
