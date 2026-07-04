@@ -177,6 +177,15 @@ func (h *HandlerContext) HandleGetThumbnail(w http.ResponseWriter, r *http.Reque
 			return data, nil
 		}
 
+		// Cap concurrent thumbnail ffmpeg jobs; bail if the client goes away while queued (a scrub
+		// abandons most hovered positions, so their requests cancel here instead of piling up ffmpeg).
+		select {
+		case h.thumbnailSem <- struct{}{}:
+			defer func() { <-h.thumbnailSem }()
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
+
 		localStreamURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
 
 		var buf bytes.Buffer

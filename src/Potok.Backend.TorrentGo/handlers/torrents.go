@@ -48,6 +48,7 @@ type HandlerContext struct {
 	subtitleExtracted sync.Map // map[hash_file]bool — marks a file's one-pass subtitle extraction as already done
 	subtitleSFG       singleflight.Group
 	subtitleSem       chan struct{} // caps concurrent subtitle extractions (heavy full-file demux) to keep CPU/heat down
+	thumbnailSem      chan struct{} // caps concurrent thumbnail ffmpeg jobs — a timeline scrub spawns a burst
 	ffmpegPath        string
 	ffprobePath       string
 	videoAccel        *hwAccel // chosen H.264 transcode backend (nil = software libx264)
@@ -66,6 +67,10 @@ func NewHandlerContext(engine *bt.Engine, sm *speed.Monitor, cfg *config.Config,
 	// Serialize subtitle extraction: it's a one-time, cached full-file demux per file — running
 	// several at once is what pegged the CPU. One at a time keeps the box cool; cache makes it rare.
 	hc.subtitleSem = make(chan struct{}, 1)
+	// Timeline scrubbing fires one thumbnail request per hovered position; cap how many ffmpeg jobs
+	// run at once so a scrub can't spawn a process storm (the subtitle path caps at 1; thumbnails are
+	// lighter, especially with HW decode, so a couple in parallel is fine).
+	hc.thumbnailSem = make(chan struct{}, 2)
 	hc.ffmpegPath, hc.ffprobePath = resolveFFmpegBinaries()
 	hc.videoAccel = detectVideoAccel(hc.ffmpegPath)
 	return hc

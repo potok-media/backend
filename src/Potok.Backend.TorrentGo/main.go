@@ -168,6 +168,8 @@ func main() {
 			r.Get("/{hash}/files/{fileIndex}/thumbnail", hCtx.HandleGetThumbnail)
 			r.Get("/{hash}/files/{fileIndex}/subtitles/{trackIndex}", hCtx.HandleGetSubtitles)
 			r.Get("/{hash}/files/{fileIndex}/hls/{res}", hCtx.HandleHls)
+			// Player teardown (navigator.sendBeacon on close/leave) — kills the file's ffmpeg producer now.
+			r.Post("/{hash}/files/{fileIndex}/hls/stop", hCtx.HandleStopHls)
 
 			// RESTful Streaming sub-routes
 			r.Get("/{hash}/files/{fileIndex}/stream", hCtx.HandleStream)

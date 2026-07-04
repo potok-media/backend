@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,7 +37,14 @@ import (
 // MPEG-TS copy dropped the parameter sets there → MSE couldn't decode → the picture froze until the
 // next IDR while audio kept going. fMP4 fixes that at the source.
 const (
-	hlsIdleTimeout = 10 * time.Minute
+	// Idle backstop: a session with no segment requests for this long is reaped. Kept above hls.js's
+	// max forward buffer (maxMaxBufferLength) so a buffer-full active player is never false-reaped —
+	// the explicit stop-on-close beacon is the fast path; this only catches missed beacons (crash/netloss).
+	hlsIdleTimeout = 150 * time.Second
+	// Ceiling on concurrent ffmpeg producers (each = one transcode + one torrent loopback reader).
+	// Bounds CPU/GPU and, crucially, torrent-client lock pressure so a pile-up can't wedge the client.
+	// Enforced by evicting the least-recently-used session when exceeded (see enforceProducerCap).
+	hlsMaxConcurrentProducers = 4
 	// How far ahead of the producer's head a requested segment may be before we reposition instead
 	// of waiting. Larger than hls.js's forward prefetch (~maxBufferLength) so ordinary buffering
 	// waits for the running muxer, and only genuine far seeks pay for a restart.
@@ -241,6 +249,9 @@ func (h *HandlerContext) ensureSessionCovers(ctx context.Context, hashHex, fileI
 		return s
 	}
 
+	// Keep concurrent producers bounded before starting another: evict the least-recently-used session.
+	h.enforceProducerCap(key)
+
 	// (Re)start the producer at segment n.
 	if s.cancel != nil {
 		s.cancel()
@@ -349,6 +360,12 @@ func (h *HandlerContext) startHlsProducer(sctx context.Context, hashHex, fileInd
 	}
 	if sl.transcode {
 		args = append(args, h.videoAccel.inputArgs()...)
+	}
+	// Cap how far ahead the producer races so it can't gulp the whole file to EOF after the client
+	// leaves (and to bound background piece-fetching). 3.5x realtime still fills the player's forward
+	// buffer fast enough for smooth seeking.
+	if checkReadrateSupport(h.ffmpegPath) {
+		args = append(args, "-readrate", "3.5")
 	}
 	if srcStart > 0.001 {
 		args = append(args, "-ss", fmt.Sprintf("%.3f", srcStart))
@@ -527,7 +544,7 @@ func (h *HandlerContext) purgeHlsSessions(hashHex string) {
 
 func (h *HandlerContext) reapHlsSessions() {
 	for {
-		time.Sleep(time.Minute)
+		time.Sleep(30 * time.Second)
 		cutoff := time.Now().Add(-hlsIdleTimeout)
 		h.hlsSessions.Range(func(k, v interface{}) bool {
 			s, ok := v.(*hlsSession)
@@ -555,6 +572,94 @@ func (h *HandlerContext) reapHlsSessions() {
 			return true
 		})
 	}
+}
+
+// enforceProducerCap keeps the number of live ffmpeg producers at or below hlsMaxConcurrentProducers
+// by cancelling the least-recently-used session's producer. Best-effort and lock-safe: it only
+// TryLocks other sessions (never blocks, never touches the caller's already-held lock), so at worst
+// the cap is briefly exceeded. currentKey is excluded — it's the session about to (re)start.
+func (h *HandlerContext) enforceProducerCap(currentKey string) {
+	type entry struct {
+		s    *hlsSession
+		last time.Time
+	}
+	var live []entry
+	h.hlsSessions.Range(func(k, v interface{}) bool {
+		if key, _ := k.(string); key == currentKey {
+			return true
+		}
+		s, ok := v.(*hlsSession)
+		if !ok || !s.mu.TryLock() {
+			return true
+		}
+		if s.started {
+			live = append(live, entry{s, s.lastAccess})
+		}
+		s.mu.Unlock()
+		return true
+	})
+	if len(live) < hlsMaxConcurrentProducers {
+		return
+	}
+	// Keep the most-recently-accessed (cap-1) others (+ the caller = cap); evict the oldest rest.
+	sort.Slice(live, func(i, j int) bool { return live[i].last.Before(live[j].last) })
+	for _, e := range live[:len(live)-(hlsMaxConcurrentProducers-1)] {
+		if !e.s.mu.TryLock() {
+			continue
+		}
+		if e.s.started {
+			if e.s.cancel != nil {
+				e.s.cancel()
+			}
+			if e.s.dir != "" {
+				_ = os.RemoveAll(e.s.dir)
+			}
+			e.s.started = false
+			slog.Info("hls producer evicted (concurrency cap)", "cap", hlsMaxConcurrentProducers)
+		}
+		e.s.mu.Unlock()
+	}
+}
+
+// stopHlsFileSessions cancels every producer for one (hash,file) across all audio variants and drops
+// the session entries. Called by the player's stop-on-close beacon so the server-side ffmpeg dies
+// immediately instead of running for up to hlsIdleTimeout after the client is gone.
+func (h *HandlerContext) stopHlsFileSessions(hashHex, fileIndexStr string) {
+	prefix := hashHex + "_" + fileIndexStr + "_"
+	stopped := 0
+	h.hlsSessions.Range(func(k, v interface{}) bool {
+		key, _ := k.(string)
+		if !strings.HasPrefix(key, prefix) {
+			return true
+		}
+		if s, ok := v.(*hlsSession); ok {
+			s.mu.Lock()
+			if s.cancel != nil {
+				s.cancel()
+			}
+			if s.dir != "" {
+				_ = os.RemoveAll(s.dir)
+			}
+			s.started = false
+			s.mu.Unlock()
+		}
+		h.hlsSessions.Delete(k)
+		stopped++
+		return true
+	})
+	if stopped > 0 {
+		slog.Info("hls sessions stopped (client closed)", "hash", hashHex, "file", fileIndexStr, "count", stopped)
+	}
+}
+
+// HandleStopHls is the teardown endpoint the player hits (via navigator.sendBeacon) when it closes,
+// navigates away, or switches episode. It kills the file's ffmpeg producer(s) right away.
+func (h *HandlerContext) HandleStopHls(w http.ResponseWriter, r *http.Request) {
+	hashHex := chi.URLParam(r, "hash")
+	fileIndexStr := chi.URLParam(r, "fileIndex")
+	h.stopHlsFileSessions(hashHex, fileIndexStr)
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func sanitizeAudioParam(a string) string {
