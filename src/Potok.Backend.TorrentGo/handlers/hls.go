@@ -56,6 +56,7 @@ type hlsSession struct {
 	cancel         context.CancelFunc
 	startSeg       int
 	started        bool
+	gen            int // producer generation; a run's cmd-wait only self-heals if it's still current
 	lastAccess     time.Time
 	lastReposition time.Time
 	head           atomic.Int64 // highest cached absolute segment index this run produced (startSeg-1 = none)
@@ -254,7 +255,8 @@ func (h *HandlerContext) ensureSessionCovers(ctx context.Context, hashHex, fileI
 		return nil
 	}
 	sctx, cancel := context.WithCancel(context.Background())
-	if err := h.startHlsProducer(sctx, hashHex, fileIndexStr, audio, sl, n, dir); err != nil {
+	cmd, err := h.startHlsProducer(sctx, hashHex, fileIndexStr, audio, sl, n, dir)
+	if err != nil {
 		cancel()
 		_ = os.RemoveAll(dir)
 		s.started = false
@@ -266,16 +268,72 @@ func (h *HandlerContext) ensureSessionCovers(ctx context.Context, hashHex, fileI
 	s.startSeg = n
 	s.head.Store(int64(n - 1))
 	s.started = true
+	s.gen++
 	s.lastReposition = time.Now()
+	// State is fully set under s.mu before these goroutines run; waitProducer/watchHlsHead can only
+	// lock s.mu after we unlock, so they always see this run's committed generation.
 	go h.watchHlsHead(sctx, s, dir, key, n)
+	go h.waitProducer(sctx, s, s.gen, dir, key, cmd)
 	slog.Info("hls producer started", "key", key, "startSeg", n, "transcode", sl.transcode)
 	return s
 }
 
-// startHlsProducer launches the ffmpeg muxer for one contiguous run beginning at segment startSeg.
-func (h *HandlerContext) startHlsProducer(sctx context.Context, hashHex, fileIndexStr, audio string, sl *segList, startSeg int, dir string) error {
+// waitProducer waits for one ffmpeg run to exit. If it dies on its own (crash/EOF) while it is still
+// the session's current run, mark the session unstarted so the next request restarts it, and free
+// this run's temp dir (its completed segments are already in the byte cache). A stale run (session
+// was repositioned/torn down) only cleans its own dir.
+func (h *HandlerContext) waitProducer(sctx context.Context, s *hlsSession, gen int, dir, keyPrefix string, cmd *exec.Cmd) {
+	err := cmd.Wait()
+	// Cache any completed segments the watcher hasn't drained yet (e.g. the last one at EOF) before
+	// removing the dir, so the tail of the file doesn't have to be re-produced on demand.
+	h.drainSegments(dir, keyPrefix)
+	s.mu.Lock()
+	current := s.gen == gen
+	if current {
+		s.started = false
+		if s.cancel != nil {
+			s.cancel() // stop this run's watchHlsHead goroutine (sctx isn't cancelled at natural EOF)
+		}
+	}
+	s.mu.Unlock()
+	_ = os.RemoveAll(dir) // idempotent: reposition/reap may have removed it already
+	if current && sctx.Err() == nil {
+		slog.Warn("hls producer exited unexpectedly (will restart on next request)", "err", err)
+	}
+}
+
+// drainSegments caches every completed segment (and the init) currently in dir that isn't cached yet.
+func (h *HandlerContext) drainSegments(dir, keyPrefix string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		m := hlsSegmentRe.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+		key := keyPrefix + "_" + m[1]
+		if _, ok := h.hlsSegCache.get(key); ok {
+			continue
+		}
+		if data, rerr := os.ReadFile(filepath.Join(dir, e.Name())); rerr == nil && len(data) > 0 {
+			h.hlsSegCache.put(key, data)
+		}
+	}
+	initKey := keyPrefix + "_init"
+	if _, ok := h.hlsSegCache.get(initKey); !ok {
+		if data, rerr := os.ReadFile(filepath.Join(dir, "init.mp4")); rerr == nil && len(data) > 0 {
+			h.hlsSegCache.put(initKey, data)
+		}
+	}
+}
+
+// startHlsProducer launches the ffmpeg muxer for one contiguous run beginning at segment startSeg,
+// returning the running command so the caller can watch for its exit (see waitProducer).
+func (h *HandlerContext) startHlsProducer(sctx context.Context, hashHex, fileIndexStr, audio string, sl *segList, startSeg int, dir string) (*exec.Cmd, error) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return fmt.Errorf("ffmpeg not found in PATH")
+		return nil, fmt.Errorf("ffmpeg not found in PATH")
 	}
 	streamURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
 	srcStart := sl.srcStart(startSeg)
@@ -325,10 +383,9 @@ func (h *HandlerContext) startHlsProducer(sctx context.Context, hashHex, fileInd
 
 	cmd := exec.CommandContext(sctx, "ffmpeg", args...)
 	if err := cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
-	go func() { _ = cmd.Wait() }()
-	return nil
+	return cmd, nil
 }
 
 // watchHlsHead moves each completed segment file into the byte cache and deletes the file, then
@@ -475,7 +532,9 @@ func (h *HandlerContext) reapHlsSessions() {
 				return true
 			}
 			s.mu.Lock()
-			idle := s.started && s.lastAccess.Before(cutoff)
+			// Reap by idleness regardless of `started`, so failed-start (started=false) entries and
+			// self-crashed producers are cleaned up too, not just live ones.
+			idle := s.lastAccess.Before(cutoff)
 			if idle {
 				if s.cancel != nil {
 					s.cancel()
