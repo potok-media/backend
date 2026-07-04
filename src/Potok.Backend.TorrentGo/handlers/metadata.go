@@ -38,13 +38,12 @@ func (h *HandlerContext) HandleGetMediaMetadata(w http.ResponseWriter, r *http.R
 	hashHex := chi.URLParam(r, "hash")
 	fileIndexStr := chi.URLParam(r, "fileIndex")
 
-	// Pre-warm HLS: the player fetches metadata as it opens, so build the segmentation (parses the
-	// container keyframe index) and start the producer from seg0 now — the first segments are being
-	// made by the time hls.js requests the playlist.
+	// Pre-warm only the segmentation (parses the container keyframe index) so the playlist is ready
+	// fast. We deliberately don't start the producer at seg 0 here: on resume the player immediately
+	// requests a mid-file segment, which would tear down the seg-0 run — a wasted transcode. The
+	// first real segment request starts the producer at the right position.
 	go func() {
-		if sl, err := h.getSegList(context.Background(), hashHex, fileIndexStr); err == nil {
-			h.ensureSessionCovers(context.Background(), hashHex, fileIndexStr, "", sl, 0)
-		}
+		_, _ = h.getSegList(context.Background(), hashHex, fileIndexStr)
 	}()
 
 	cacheKey := fmt.Sprintf("%s_%s", hashHex, fileIndexStr)
@@ -101,7 +100,7 @@ func (h *HandlerContext) probeAndCacheMetadata(ctx context.Context, hashHex, fil
 		return val.([]byte), nil
 	}
 
-	if _, err := exec.LookPath("ffprobe"); err != nil {
+	if _, err := exec.LookPath(h.ffprobePath); err != nil {
 		return nil, fmt.Errorf("ffprobe not found")
 	}
 
@@ -120,7 +119,7 @@ func (h *HandlerContext) probeAndCacheMetadata(ctx context.Context, hashHex, fil
 		args = append(args, "-tls_verify", "0")
 	}
 	args = append(args, probeURL)
-	cmd := exec.CommandContext(probeCtx, "ffprobe", args...)
+	cmd := exec.CommandContext(probeCtx, h.ffprobePath, args...)
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf

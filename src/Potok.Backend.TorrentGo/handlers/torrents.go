@@ -44,6 +44,13 @@ type HandlerContext struct {
 	hlsSegCache       segCache // LRU of produced segment bytes — serving source, decoupled from sessions
 	hlsReaperOnce     sync.Once
 	lastSeen          sync.Map // map[hash]time.Time — heartbeat from the client's status poll; drives the idle reaper
+	subtitleCache     sync.Map // map[hash_file_relIndex_format][]byte — extracted subtitle text; one demux per file, served forever
+	subtitleExtracted sync.Map // map[hash_file]bool — marks a file's one-pass subtitle extraction as already done
+	subtitleSFG       singleflight.Group
+	subtitleSem       chan struct{} // caps concurrent subtitle extractions (heavy full-file demux) to keep CPU/heat down
+	ffmpegPath        string
+	ffprobePath       string
+	videoAccel        *hwAccel // chosen H.264 transcode backend (nil = software libx264)
 }
 
 func NewHandlerContext(engine *bt.Engine, sm *speed.Monitor, cfg *config.Config, ts *ThumbnailService) *HandlerContext {
@@ -56,6 +63,11 @@ func NewHandlerContext(engine *bt.Engine, sm *speed.Monitor, cfg *config.Config,
 	if cfg != nil && cfg.HlsCacheBytes > 0 {
 		hc.hlsSegCache.maxBytes = cfg.HlsCacheBytes
 	}
+	// Serialize subtitle extraction: it's a one-time, cached full-file demux per file — running
+	// several at once is what pegged the CPU. One at a time keeps the box cool; cache makes it rare.
+	hc.subtitleSem = make(chan struct{}, 1)
+	hc.ffmpegPath, hc.ffprobePath = resolveFFmpegBinaries()
+	hc.videoAccel = detectVideoAccel(hc.ffmpegPath)
 	return hc
 }
 
@@ -293,7 +305,7 @@ func (h *HandlerContext) dropTorrent(infoHash metainfo.Hash, hashHex string) {
 	}
 	// Per-file caches that purgeHlsSessions doesn't cover — otherwise these never get freed.
 	prefix := hashHex + "_"
-	for _, m := range []*sync.Map{&h.metadataCache, &h.durationCache, &h.headersCache} {
+	for _, m := range []*sync.Map{&h.metadataCache, &h.durationCache, &h.headersCache, &h.subtitleCache, &h.subtitleExtracted} {
 		m.Range(func(k, _ interface{}) bool {
 			if key, _ := k.(string); strings.HasPrefix(key, prefix) {
 				m.Delete(k)

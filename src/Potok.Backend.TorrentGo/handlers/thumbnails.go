@@ -165,8 +165,8 @@ func (h *HandlerContext) HandleGetThumbnail(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		http.Error(w, "ffmpeg not found in PATH", http.StatusInternalServerError)
+	if _, err := exec.LookPath(h.ffmpegPath); err != nil {
+		http.Error(w, "ffmpeg not found", http.StatusInternalServerError)
 		return
 	}
 
@@ -181,10 +181,9 @@ func (h *HandlerContext) HandleGetThumbnail(w http.ResponseWriter, r *http.Reque
 
 		var buf bytes.Buffer
 		var stderr bytes.Buffer
-		args := []string{
-			"-nostdin",
-			"-ss", strconv.Itoa(roundedTime),
-		}
+		args := []string{"-nostdin"}
+		args = append(args, h.videoAccel.inputArgs()...) // HW-decode the keyframe (HEVC 10-bit is costly in software)
+		args = append(args, "-ss", strconv.Itoa(roundedTime))
 		if strings.HasPrefix(localStreamURL, "https://") {
 			args = append(args, "-tls_verify", "0")
 		}
@@ -195,7 +194,7 @@ func (h *HandlerContext) HandleGetThumbnail(w http.ResponseWriter, r *http.Reque
 			"-f", "image2",
 			"-",
 		)
-		cmd := exec.CommandContext(r.Context(), "ffmpeg", args...)
+		cmd := exec.CommandContext(r.Context(), h.ffmpegPath, args...)
 		cmd.Stdout = &buf
 		cmd.Stderr = &stderr
 

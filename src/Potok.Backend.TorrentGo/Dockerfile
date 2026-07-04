@@ -3,38 +3,42 @@ FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
 
-# Install git and ca-certificates
 RUN apk add --no-cache git ca-certificates
 
-# Copy go modules manifests and download dependencies
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the rest of the application source code
 COPY . .
 
-# Build the application as a static binary
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o potok-torrent-go .
 
-# Final runtime stage
-FROM alpine:latest
+# Runtime stage — Debian (glibc) so jellyfin-ffmpeg installs. jellyfin-ffmpeg bundles the codecs and
+# GPU drivers (VAAPI/QSV/NVENC) needed for hardware transcoding; TorrentGo probes them at startup and
+# falls back to software x264 when no GPU is passed in. Falls back to distro ffmpeg where the
+# jellyfin package isn't published for the target arch.
+FROM debian:bookworm-slim
+ARG TARGETARCH
 
-# Install ca-certificates, tzdata, and ffmpeg (includes ffprobe) for media processing
-RUN apk add --no-cache ca-certificates tzdata ffmpeg
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates tzdata gnupg curl; \
+    mkdir -p /etc/apt/keyrings; \
+    curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key | gpg --dearmor -o /etc/apt/keyrings/jellyfin.gpg; \
+    printf 'Types: deb\nURIs: https://repo.jellyfin.org/debian\nSuites: bookworm\nComponents: main\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/jellyfin.gpg\n' "${TARGETARCH:-amd64}" > /etc/apt/sources.list.d/jellyfin.sources; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends jellyfin-ffmpeg7 || apt-get install -y --no-install-recommends ffmpeg; \
+    apt-get purge -y --auto-remove gnupg curl; \
+    rm -rf /var/lib/apt/lists/*
+
+ENV FFMPEG_PATH=/usr/lib/jellyfin-ffmpeg/ffmpeg
 
 WORKDIR /app
 
-# Copy the compiled binary from the builder stage
 COPY --from=builder /app/potok-torrent-go .
 
-# Default HTTP server port
 EXPOSE 5282
-
-# BitTorrent peer listen port (UDP)
 EXPOSE 55123/udp
 
-# Mount volume for downloading torrents and keeping cache
 VOLUME ["/app/torrent-cache"]
 
-# Run the application
 CMD ["./potok-torrent-go"]

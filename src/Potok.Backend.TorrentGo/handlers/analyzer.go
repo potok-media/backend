@@ -157,7 +157,7 @@ func (h *HandlerContext) getEpisodeFingerprint(ctx context.Context, hashHex stri
 		"-f", "wav",
 		"-",
 	)
-	ffmpegCmd := exec.CommandContext(extractCtx, "ffmpeg", args...)
+	ffmpegCmd := exec.CommandContext(extractCtx, h.ffmpegPath, args...)
 
 	// fpcalc reads wav from stdin and outputs raw json fingerprint
 	fpcalcCmd := exec.CommandContext(extractCtx, "fpcalc",

@@ -54,6 +54,11 @@ services:
       # ------------------------------------------------------------------------
     environment:
       - PORT=${TORRENTGO_PORT:-5282}
+    # Hardware transcoding: default maps a harmless no-op device so this works on any host. To enable
+    # GPU acceleration, set GPU_DEVICE=/dev/dri:/dev/dri in your .env (Intel/AMD) — TorrentGo detects
+    # and uses it automatically, or stays on software if absent.
+    devices:
+      - ${GPU_DEVICE:-/dev/null:/dev/null}
 
   # 🗄️ PostgreSQL (bundled — required by Gateway and SearchEngine).
   # To use an external/shared database instead, point DB_HOST at it and remove this service.

@@ -124,7 +124,7 @@ func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 	remuxParam := r.URL.Query().Get("remux") == "true"
 
 	if audioParam != "" || startParam != "" || remuxParam {
-		if _, err := exec.LookPath("ffmpeg"); err == nil {
+		if _, err := exec.LookPath(h.ffmpegPath); err == nil {
 			localStreamURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
 
 			w.Header().Set("Content-Type", "video/mp4")
@@ -138,7 +138,7 @@ func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 			if startParam != "" {
 				args = append(args, "-noaccurate_seek", "-ss", startParam)
 			}
-			if checkReadrateSupport() {
+			if checkReadrateSupport(h.ffmpegPath) {
 				args = append(args, "-readrate", "3.5")
 			}
 			if strings.HasPrefix(localStreamURL, "https://") {
@@ -175,7 +175,7 @@ func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 				"-",
 			)
 
-			cmd := exec.CommandContext(r.Context(), "ffmpeg", args...)
+			cmd := exec.CommandContext(r.Context(), h.ffmpegPath, args...)
 			cmd.Stdout = w
 			cmd.Stderr = nil
 
@@ -409,9 +409,9 @@ var (
 	supportsReadrateOnce sync.Once
 )
 
-func checkReadrateSupport() bool {
+func checkReadrateSupport(ffmpegPath string) bool {
 	supportsReadrateOnce.Do(func() {
-		cmd := exec.Command("ffmpeg", "-readrate", "1.0", "-h")
+		cmd := exec.Command(ffmpegPath, "-readrate", "1.0", "-h")
 		if err := cmd.Run(); err == nil {
 			supportsReadrate = true
 			slog.Info("ffmpeg supports -readrate option")

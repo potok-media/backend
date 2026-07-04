@@ -332,8 +332,8 @@ func (h *HandlerContext) drainSegments(dir, keyPrefix string) {
 // startHlsProducer launches the ffmpeg muxer for one contiguous run beginning at segment startSeg,
 // returning the running command so the caller can watch for its exit (see waitProducer).
 func (h *HandlerContext) startHlsProducer(sctx context.Context, hashHex, fileIndexStr, audio string, sl *segList, startSeg int, dir string) (*exec.Cmd, error) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return nil, fmt.Errorf("ffmpeg not found in PATH")
+	if _, err := exec.LookPath(h.ffmpegPath); err != nil {
+		return nil, fmt.Errorf("ffmpeg not found")
 	}
 	streamURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
 	srcStart := sl.srcStart(startSeg)
@@ -347,6 +347,9 @@ func (h *HandlerContext) startHlsProducer(sctx context.Context, hashHex, fileInd
 	if strings.HasPrefix(streamURL, "https://") {
 		args = append(args, "-tls_verify", "0")
 	}
+	if sl.transcode {
+		args = append(args, h.videoAccel.inputArgs()...)
+	}
 	if srcStart > 0.001 {
 		args = append(args, "-ss", fmt.Sprintf("%.3f", srcStart))
 	}
@@ -354,11 +357,11 @@ func (h *HandlerContext) startHlsProducer(sctx context.Context, hashHex, fileInd
 
 	segDur := fmt.Sprintf("%g", hlsSegmentSeconds)
 	if sl.transcode {
-		// No source keyframe index (or non-H.264): transcode and force keyframes on the segment
-		// grid so real cuts match the uniform playlist. Normalize to 0 then shift the timeline back
-		// to the absolute source position (output_ts_offset) so runs stay on one timeline.
+		// Force keyframes on the segment grid so real cuts match the uniform playlist, and shift the
+		// timeline back to the absolute source position so runs stay on one timeline. Video codec is
+		// the probed hardware encoder (or software x264 fallback).
+		args = append(args, h.videoAccel.videoArgs()...)
 		args = append(args,
-			"-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-pix_fmt", "yuv420p",
 			"-force_key_frames", "expr:gte(t,n_forced*"+segDur+")",
 			"-output_ts_offset", fmt.Sprintf("%.3f", srcStart),
 		)
@@ -381,7 +384,7 @@ func (h *HandlerContext) startHlsProducer(sctx context.Context, hashHex, fileInd
 		filepath.Join(dir, "index.m3u8"),
 	)
 
-	cmd := exec.CommandContext(sctx, "ffmpeg", args...)
+	cmd := exec.CommandContext(sctx, h.ffmpegPath, args...)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -438,7 +441,7 @@ func (h *HandlerContext) probeVideoCodec(ctx context.Context, hashHex, fileIndex
 	if v, ok := h.hlsVideoCodec.Load(key); ok {
 		return v.(string)
 	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
+	if _, err := exec.LookPath(h.ffprobePath); err != nil {
 		return ""
 	}
 	probeURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
@@ -447,7 +450,7 @@ func (h *HandlerContext) probeVideoCodec(ctx context.Context, hashHex, fileIndex
 		args = append(args, "-tls_verify", "0")
 	}
 	args = append(args, probeURL)
-	out, err := exec.CommandContext(ctx, "ffprobe", args...).Output()
+	out, err := exec.CommandContext(ctx, h.ffprobePath, args...).Output()
 	if err != nil {
 		return ""
 	}
@@ -465,7 +468,7 @@ func (h *HandlerContext) videoStartPTS(ctx context.Context, hashHex, fileIndexSt
 	if v, ok := h.hlsVideoStartPTS.Load(key); ok {
 		return v.(float64)
 	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
+	if _, err := exec.LookPath(h.ffprobePath); err != nil {
 		return 0
 	}
 	probeURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
@@ -475,7 +478,7 @@ func (h *HandlerContext) videoStartPTS(ctx context.Context, hashHex, fileIndexSt
 		args = append(args, "-tls_verify", "0")
 	}
 	args = append(args, probeURL)
-	out, err := exec.CommandContext(ctx, "ffprobe", args...).Output()
+	out, err := exec.CommandContext(ctx, h.ffprobePath, args...).Output()
 	if err != nil {
 		return 0
 	}
