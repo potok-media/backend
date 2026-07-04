@@ -20,8 +20,8 @@ func NewEngine(cfg *config.Config, store *storage.Storage) (*Engine, error) {
 	
 	clientCfg.DefaultStorage = store
 	clientCfg.ListenPort = cfg.ListenPort
-	clientCfg.EstablishedConnsPerTorrent = 250
-	clientCfg.HalfOpenConnsPerTorrent = 100
+	clientCfg.EstablishedConnsPerTorrent = cfg.ConnsPerTorrent
+	clientCfg.HalfOpenConnsPerTorrent = cfg.HalfOpenConns
 	
 	slog.Info("Initializing Torrent Client with custom storage...",
 		slog.Int("listenPort", cfg.ListenPort),

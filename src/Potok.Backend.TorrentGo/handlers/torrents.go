@@ -43,15 +43,20 @@ type HandlerContext struct {
 	hlsSessions       sync.Map // map[string]*hlsSession — one repositionable ffmpeg muxer per (file,audio)
 	hlsSegCache       segCache // LRU of produced segment bytes — serving source, decoupled from sessions
 	hlsReaperOnce     sync.Once
+	lastSeen          sync.Map // map[hash]time.Time — heartbeat from the client's status poll; drives the idle reaper
 }
 
 func NewHandlerContext(engine *bt.Engine, sm *speed.Monitor, cfg *config.Config, ts *ThumbnailService) *HandlerContext {
-	return &HandlerContext{
+	hc := &HandlerContext{
 		Engine:            engine,
 		SpeedMonitor:      sm,
 		Config:            cfg,
 		ThumbService:      ts,
 	}
+	if cfg != nil && cfg.HlsCacheBytes > 0 {
+		hc.hlsSegCache.maxBytes = cfg.HlsCacheBytes
+	}
+	return hc
 }
 
 type TorrentFilesRequest struct {
@@ -131,6 +136,9 @@ func (h *HandlerContext) HandleGetFiles(w http.ResponseWriter, r *http.Request) 
 	}
 
 	hashHex := t.InfoHash().HexString()
+	// Grace heartbeat for a freshly-resolved torrent so the reaper doesn't drop it before the
+	// client starts its status polling.
+	h.lastSeen.Store(hashHex, time.Now())
 	videoExtensions := map[string]bool{
 		".mkv": true,
 		".mp4": true,
@@ -213,6 +221,10 @@ func (h *HandlerContext) HandleGetStatus(w http.ResponseWriter, r *http.Request)
 	}
 	copy(infoHash[:], hexBytes)
 
+	// Heartbeat: the client polls this endpoint while the torrent is in use. As long as polls keep
+	// arriving the idle reaper leaves it alone; when they stop (player/page closed) it gets dropped.
+	h.lastSeen.Store(hashHex, time.Now())
+
 	t, ok := h.Engine.Client.Torrent(infoHash)
 	if !ok {
 		http.Error(w, "Torrent not found", http.StatusNotFound)
@@ -261,32 +273,63 @@ func (h *HandlerContext) HandleDeleteTorrent(w http.ResponseWriter, r *http.Requ
 	}
 	copy(infoHash[:], hexBytes)
 
-	h.purgeHlsSessions(hashHex)
-
-	t, ok := h.Engine.Client.Torrent(infoHash)
-	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
-		return
-	}
-
-	// Prevent deletion if actively streaming
-	if cache, ok := h.Engine.Storage.GetCache(infoHash); ok {
-		if cache.ActiveReaderCount() > 0 {
-			http.Error(w, "Torrent is actively playing", http.StatusConflict)
-			return
-		}
-		_ = cache.Close()
-		h.Engine.Storage.DeleteCache(infoHash)
-	}
-
-	slog.Info("Stopping and dropping torrent from client", "hash", hashHex)
-	t.Drop()
-
-	h.timecodeCache.Delete(hashHex)
+	h.dropTorrent(infoHash, hashHex)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// dropTorrent force-tears-down a torrent and frees ALL of its memory: kills its HLS ffmpeg
+// producers (closing their loopback readers), closes+removes its piece cache, drops it from the
+// client, and purges every per-file cache. Used by both the idle reaper and the DELETE endpoint.
+func (h *HandlerContext) dropTorrent(infoHash metainfo.Hash, hashHex string) {
+	h.purgeHlsSessions(hashHex) // cancel ffmpeg first so its loopback readers unwind
+	if cache, ok := h.Engine.Storage.GetCache(infoHash); ok {
+		_ = cache.Close()
+		h.Engine.Storage.DeleteCache(infoHash)
+	}
+	if t, ok := h.Engine.Client.Torrent(infoHash); ok {
+		t.Drop()
+	}
+	// Per-file caches that purgeHlsSessions doesn't cover — otherwise these never get freed.
+	prefix := hashHex + "_"
+	for _, m := range []*sync.Map{&h.metadataCache, &h.durationCache, &h.headersCache} {
+		m.Range(func(k, _ interface{}) bool {
+			if key, _ := k.(string); strings.HasPrefix(key, prefix) {
+				m.Delete(k)
+			}
+			return true
+		})
+	}
+	h.timecodeCache.Delete(hashHex)
+	h.lastSeen.Delete(hashHex)
+	slog.Info("torrent dropped", "hash", hashHex)
+}
+
+// ReapIdleTorrents drops torrents whose client heartbeat (the status poll) has gone silent past the
+// idle timeout — the automatic replacement for a client-sent DELETE. Runs for the process lifetime.
+func (h *HandlerContext) ReapIdleTorrents() {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		timeout := h.Config.TorrentIdleTimeout
+		if timeout <= 0 {
+			continue
+		}
+		now := time.Now()
+		for _, t := range h.Engine.Client.Torrents() {
+			hashHex := t.InfoHash().HexString()
+			v, ok := h.lastSeen.Load(hashHex)
+			if !ok {
+				// No heartbeat recorded yet — grant a grace window rather than dropping immediately.
+				h.lastSeen.Store(hashHex, now)
+				continue
+			}
+			if now.Sub(v.(time.Time)) > timeout {
+				h.dropTorrent(t.InfoHash(), hashHex)
+			}
+		}
+	}
 }
 
 func (h *HandlerContext) getLoopbackURL(path string) string {

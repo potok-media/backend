@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -88,6 +89,13 @@ func main() {
 	slog.Info("Starting Potok Go Torrent Engine v2...")
 	raiseRlimit()
 
+	// Soft Go-heap ceiling (POTOK_MEM_LIMIT_MB): the runtime GCs harder as it approaches this,
+	// avoiding OOM. 0 = leave it to any external GOMEMLIMIT / no limit.
+	if cfg.MemLimitBytes > 0 {
+		debug.SetMemoryLimit(cfg.MemLimitBytes)
+		slog.Info("Go memory soft limit set", "bytes", cfg.MemLimitBytes)
+	}
+
 	// 3. Setup custom storage and BT engine
 	store := storage.NewStorage(cfg)
 	engine, err := bt.NewEngine(cfg, store)
@@ -107,6 +115,9 @@ func main() {
 
 	// Handler Context
 	hCtx := handlers.NewHandlerContext(engine, sm, cfg, ts)
+
+	// Reap idle torrents (no status-poll heartbeat past the timeout) → frees their RAM automatically.
+	go hCtx.ReapIdleTorrents()
 
 	// 4. Setup router
 	r := chi.NewRouter()

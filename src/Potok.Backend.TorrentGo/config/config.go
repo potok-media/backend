@@ -15,6 +15,8 @@ type Config struct {
 	ConnsPerTorrent    int
 	HalfOpenConns      int
 	CacheSizeBytes     int64
+	HlsCacheBytes      int64
+	MemLimitBytes      int64
 	PreloadBytes       int64
 	ReadaheadPercent   int
 	ThumbCacheSize     int
@@ -25,6 +27,8 @@ type Config struct {
 
 func LoadConfig() *Config {
 	cacheMB := getEnvInt64("POTOK_CACHE_SIZE_MB", 256)
+	hlsCacheMB := getEnvInt64("POTOK_HLS_CACHE_MB", 256)
+	memLimitMB := getEnvInt64("POTOK_MEM_LIMIT_MB", 0) // 0 = no soft limit (respect external GOMEMLIMIT)
 	preloadMB := getEnvInt64("POTOK_PRELOAD_MB", 20)
 
 	return &Config{
@@ -36,11 +40,13 @@ func LoadConfig() *Config {
 		ConnsPerTorrent:    getEnvInt("POTOK_CONNS_PER_TORRENT", 250),
 		HalfOpenConns:      getEnvInt("POTOK_HALF_OPEN_CONNS", 120),
 		CacheSizeBytes:     cacheMB * 1024 * 1024,
+		HlsCacheBytes:      hlsCacheMB * 1024 * 1024,
+		MemLimitBytes:      memLimitMB * 1024 * 1024,
 		PreloadBytes:       preloadMB * 1024 * 1024,
 		ReadaheadPercent:   getEnvInt("POTOK_READAHEAD_PERCENT", 50),
 		ThumbCacheSize:     getEnvInt("POTOK_THUMB_CACHE_SIZE", 200),
 		ThumbCacheTTL:      getEnvDuration("POTOK_THUMB_CACHE_TTL", 5*time.Minute),
-		TorrentIdleTimeout: getEnvDuration("POTOK_TORRENT_IDLE_TIMEOUT", 30*time.Second),
+		TorrentIdleTimeout: getEnvDuration("POTOK_TORRENT_IDLE_TIMEOUT", 60*time.Second),
 		DisableAnalyzer:    getEnvBool("POTOK_DISABLE_ANALYZER", false),
 	}
 }
