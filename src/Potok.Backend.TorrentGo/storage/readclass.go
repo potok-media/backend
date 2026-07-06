@@ -28,6 +28,11 @@ const (
 	// ClassPatientDemux — the full-file demux fallback (a container that can't be seeked). A linear
 	// whole-file read whose caller cap is minutes, so its per-block wait budget is large.
 	ClassPatientDemux
+	// ClassMKVIndex — the dedicated MKV Cues (keyframe index) read for the copy-vs-transcode decision. Like
+	// ClassColdProbe but boosts a WIDE file-tail window so the multi-piece Cues download in time (the plain
+	// 2-piece tail boost misses them on a large rip → slow transcode fallback). Runs AFTER the codec probe,
+	// which warms the front, so the wide tail boost can't starve the header read.
+	ClassMKVIndex
 )
 
 // playbackReadaheadBytes is the live player's read-ahead budget in BYTES (not a fixed piece count).
@@ -39,14 +44,21 @@ const (
 // torrents while staying safely bounded on large-piece ones.
 const playbackReadaheadBytes = 64 << 20 // 64 MiB
 
+// headFootTailBytes is the file-TAIL window (byte-bounded, scales with piece size like the read-ahead) that
+// ClassMKVIndex boosts to High. MKV Cues sit near — but not AT — the end (often before trailing Tags/
+// Attachments) and span several pieces on a multi-GB rip, so the plain 2-piece tail boost misses them and
+// the cold Cues read fails ("invalid varint length") → the whole file falls to the slow transcode grid.
+const headFootTailBytes = 32 << 20 // 32 MiB
+
 // classPolicy is the fixed mapping from a ReadClass to piece priority + read-ahead + wait budget.
 type classPolicy struct {
-	curPrio       torrent.PiecePriority // priority for the piece currently being read
-	aheadPrio     torrent.PiecePriority // priority for the read-ahead window
-	aheadPieces   int                   // fixed pieces ahead to claim (used when aheadBytes == 0)
-	aheadBytes    int64                 // byte-bounded read-ahead (preferred when > 0); scales with piece size
-	headFootBoost bool                  // also boost the file's first/last 2 pieces (container index)
-	waitBudget    time.Duration         // max wall time to wait for one block range, before any caller deadline
+	curPrio        torrent.PiecePriority // priority for the piece currently being read
+	aheadPrio      torrent.PiecePriority // priority for the read-ahead window
+	aheadPieces    int                   // fixed pieces ahead to claim (used when aheadBytes == 0)
+	aheadBytes     int64                 // byte-bounded read-ahead (preferred when > 0); scales with piece size
+	headFootBoost  bool                  // also boost the file's first/last 2 pieces (container index)
+	tailBoostBytes int64                 // when > 0, widen the FOOT boost to this byte window (MKV Cues) instead of 2 pieces
+	waitBudget     time.Duration         // max wall time to wait for one block range, before any caller deadline
 }
 
 // aheadPiecesFor is the effective read-ahead depth in pieces for a torrent whose pieces are pieceLen
@@ -73,18 +85,23 @@ func (c ReadClass) policy() classPolicy {
 	switch c {
 	case ClassPlayback:
 		// Byte-bounded read-ahead (aheadBytes) so the eviction-protected window scales with piece size.
-		return classPolicy{torrent.PiecePriorityNow, torrent.PiecePriorityHigh, 0, playbackReadaheadBytes, true, 15 * time.Second}
+		return classPolicy{curPrio: torrent.PiecePriorityNow, aheadPrio: torrent.PiecePriorityHigh, aheadBytes: playbackReadaheadBytes, headFootBoost: true, waitBudget: 15 * time.Second}
 	case ClassAheadDemux:
 		// headFootBoost=true: a windowed subtitle / thumbnail extraction input-seeks (-ss), which needs
 		// the container index (MKV Cues / MP4 moov) at the file head/foot — boost those so the seek
 		// resolves instead of stalling even when the window's own region is already resident.
-		return classPolicy{torrent.PiecePriorityNormal, torrent.PiecePriorityNormal, 12, 0, true, 30 * time.Second}
+		return classPolicy{curPrio: torrent.PiecePriorityNormal, aheadPrio: torrent.PiecePriorityNormal, aheadPieces: 12, headFootBoost: true, waitBudget: 30 * time.Second}
 	case ClassColdProbe:
-		return classPolicy{torrent.PiecePriorityNormal, torrent.PiecePriorityNone, 0, 0, true, 20 * time.Second}
+		return classPolicy{curPrio: torrent.PiecePriorityNormal, aheadPrio: torrent.PiecePriorityNone, headFootBoost: true, waitBudget: 20 * time.Second}
+	case ClassMKVIndex:
+		// The Cues read for the copy grid. Same as ColdProbe but with a WIDE tail boost so the multi-piece
+		// Cues download in time → COPY instead of transcode. Safe because it runs after the codec probe
+		// (front already warm), so the tail boost can't starve the header.
+		return classPolicy{curPrio: torrent.PiecePriorityNormal, aheadPrio: torrent.PiecePriorityNone, headFootBoost: true, tailBoostBytes: headFootTailBytes, waitBudget: 20 * time.Second}
 	case ClassPatientDemux:
-		return classPolicy{torrent.PiecePriorityNormal, torrent.PiecePriorityNormal, 8, 0, false, 4 * time.Minute}
+		return classPolicy{curPrio: torrent.PiecePriorityNormal, aheadPrio: torrent.PiecePriorityNormal, aheadPieces: 8, headFootBoost: false, waitBudget: 4 * time.Minute}
 	default:
-		return classPolicy{torrent.PiecePriorityNormal, torrent.PiecePriorityNone, 0, 0, true, 20 * time.Second}
+		return classPolicy{curPrio: torrent.PiecePriorityNormal, aheadPrio: torrent.PiecePriorityNone, headFootBoost: true, waitBudget: 20 * time.Second}
 	}
 }
 

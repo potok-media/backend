@@ -27,39 +27,63 @@ type streamLayout struct {
 	audioCodecs   []string // parallel to audios: each track's libav codec name ("aac", "ac3", …)
 }
 
+const (
+	// Cold-start patience for the codec probe. On a just-added torrent the header + first-frame pieces
+	// (which FindStreamInfo needs to resolve the pixel format) aren't downloaded yet, so a single probe reads
+	// un-downloaded bytes and fails ("unspecified pixel format" / read error at the front). The head pieces
+	// are priority-boosted (ClassColdProbe headFootBoost), so we retry with a fresh reader until the front
+	// warms — the player already shows its buffering overlay until the first segment plays — instead of
+	// hard-failing playback. Bounded so a genuinely un-probable file still surfaces an error.
+	layoutProbeDeadline   = 40 * time.Second
+	layoutProbeRetryEvery = 1500 * time.Millisecond
+)
+
 // getStreamLayout probes (once, cached) which source streams a file has, so a rendition request can map a
-// relIndex to a real source stream index.
+// relIndex to a real source stream index. Patient on a cold torrent (retries until the front warms).
 func (h *HandlerContext) getStreamLayout(ctx context.Context, hashHex, fileIndexStr string) (*streamLayout, error) {
 	key := hashHex + "_" + fileIndexStr
 	if v, ok := h.hlsStreamLayout.Load(key); ok {
 		return v.(*streamLayout), nil
 	}
-	rs, _, err := h.openTorrentFileReader(ctx, hashHex, fileIndexStr, storage.ClassColdProbe)
-	if err != nil {
-		return nil, err
-	}
-	defer rs.Close()
 
-	probe, err := media.ProbeTracks(ctx, rs)
-	if err != nil {
-		return nil, err
-	}
-	layout := &streamLayout{video: -1}
-	for _, t := range probe.Tracks {
-		switch t.Kind {
-		case "video":
-			if layout.video < 0 {
-				layout.video = t.Index
-				layout.videoCodec = t.Codec
-				layout.videoStartSec = t.StartSec
+	deadline := time.Now().Add(layoutProbeDeadline)
+	for {
+		rs, _, err := h.openTorrentFileReader(ctx, hashHex, fileIndexStr, storage.ClassColdProbe)
+		if err == nil {
+			probe, perr := media.ProbeTracks(ctx, rs)
+			rs.Close()
+			if perr == nil {
+				layout := &streamLayout{video: -1}
+				for _, t := range probe.Tracks {
+					switch t.Kind {
+					case "video":
+						if layout.video < 0 {
+							layout.video = t.Index
+							layout.videoCodec = t.Codec
+							layout.videoStartSec = t.StartSec
+						}
+					case "audio":
+						layout.audios = append(layout.audios, t.Index)
+						layout.audioCodecs = append(layout.audioCodecs, t.Codec)
+					}
+				}
+				h.hlsStreamLayout.Store(key, layout)
+				return layout, nil
 			}
-		case "audio":
-			layout.audios = append(layout.audios, t.Index)
-			layout.audioCodecs = append(layout.audioCodecs, t.Codec)
+			err = perr
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("media: stream layout probe failed (cold start): %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(layoutProbeRetryEvery):
 		}
 	}
-	h.hlsStreamLayout.Store(key, layout)
-	return layout, nil
 }
 
 // --- VIDEO rendition (audio-agnostic; produced once, shared by every audio choice) ---

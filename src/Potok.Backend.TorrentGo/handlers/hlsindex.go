@@ -114,7 +114,10 @@ func (h *HandlerContext) tryIndexSegList(ctx context.Context, hashHex, fileIndex
 	deadline := time.Now().Add(indexReadDeadline)
 	for {
 		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		rs, ext, err := h.openTorrentFileReader(rctx, hashHex, fileIndexStr, storage.ClassColdProbe)
+		// ClassMKVIndex boosts a wide file-tail window so the multi-piece MKV Cues download in time → this
+		// H.264 file lands on the COPY path instead of transcoding. Safe here (runs after getStreamLayout has
+		// warmed the front, so the tail boost can't starve the header/codec probe).
+		rs, ext, err := h.openTorrentFileReader(rctx, hashHex, fileIndexStr, storage.ClassMKVIndex)
 		if err != nil {
 			cancel()
 			return nil

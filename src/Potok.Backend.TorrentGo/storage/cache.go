@@ -268,15 +268,24 @@ func (c *Cache) UpdatePriorities(fileStartPiece, fileEndPiece int) {
 			}
 		}
 
-		// Container index: boost the file's first/last 2 pieces for classes that seek to head/foot.
+		// Container index: boost the file's head (2 pieces — MP4 moov-at-front) and its foot. The foot is 2
+		// pieces by default (MKV Cues at the very end), widened to a byte-bounded window when the class asks
+		// (tailBoostBytes > 0, i.e. ClassMKVIndex) — the Cues span several pieces near, but not at, the end on
+		// a large rip. Only the dedicated Cues read widens it, so it can't starve the front codec probe.
 		if pol.headFootBoost {
 			for idx := fileStartPiece; idx < fileStartPiece+2 && idx <= fileEndPiece; idx++ {
 				if desired[idx] < torrent.PiecePriorityHigh {
 					desired[idx] = torrent.PiecePriorityHigh
 				}
 			}
-			for idx := fileEndPiece - 1; idx <= fileEndPiece && idx >= fileStartPiece; idx++ {
-				if desired[idx] < torrent.PiecePriorityHigh {
+			tailPieces := 2
+			if pol.tailBoostBytes > 0 && pieceLen > 0 {
+				if n := int(pol.tailBoostBytes / pieceLen); n > tailPieces {
+					tailPieces = n
+				}
+			}
+			for idx := fileEndPiece - tailPieces + 1; idx <= fileEndPiece; idx++ {
+				if idx >= fileStartPiece && desired[idx] < torrent.PiecePriorityHigh {
 					desired[idx] = torrent.PiecePriorityHigh
 				}
 			}
