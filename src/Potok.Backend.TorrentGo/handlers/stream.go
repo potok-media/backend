@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,6 +19,52 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/go-chi/chi/v5"
 )
+
+// readClassFromRequest derives the storage read intent (priority + wait policy) and optional caller
+// deadline from the loopback URL: &class=playback|ahead|cold|patient (legacy &bg=1 → ahead; missing →
+// playback), and &deadline=<unixMillis> (Phase 2) which caps the reader's wait to the caller's ffmpeg
+// budget so an inner block-wait can never outlive the outer op cap.
+func readClassFromRequest(r *http.Request) (storage.ReadClass, time.Time) {
+	q := r.URL.Query()
+	class := storage.ParseReadClass(q.Get("class"), q.Get("bg") == "1")
+	var deadline time.Time
+	if ms := q.Get("deadline"); ms != "" {
+		if n, err := strconv.ParseInt(ms, 10, 64); err == nil && n > 0 {
+			deadline = time.UnixMilli(n)
+		}
+	}
+	return class, deadline
+}
+
+// fileByteInfo resolves the in-RAM cache + a file's byte offset/length within the torrent, for the
+// residency gate (does the demux window already live in cache?). ok=false when the torrent/file/cache
+// isn't resolvable yet.
+func (h *HandlerContext) fileByteInfo(hashHex, fileIndexStr string) (cache *storage.Cache, offset, length int64, ok bool) {
+	var infoHash metainfo.Hash
+	hb, err := hex.DecodeString(hashHex)
+	if err != nil || len(hb) != 20 {
+		return nil, 0, 0, false
+	}
+	copy(infoHash[:], hb)
+	t, tok := h.Engine.Client.Torrent(infoHash)
+	if !tok || t.Info() == nil {
+		return nil, 0, 0, false
+	}
+	idx, err := strconv.Atoi(fileIndexStr)
+	if err != nil {
+		return nil, 0, 0, false
+	}
+	files := t.Files()
+	if idx < 1 || idx > len(files) {
+		return nil, 0, 0, false
+	}
+	c, cok := h.Engine.Storage.GetCache(infoHash)
+	if !cok {
+		return nil, 0, 0, false
+	}
+	f := files[idx-1]
+	return c, f.Offset(), f.Length(), true
+}
 
 func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 	hashHex := chi.URLParam(r, "hash")
@@ -69,7 +114,9 @@ func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 
 	file := files[idx]
 	isRaw := r.URL.Query().Get("raw") == "true"
-	isFFmpeg := strings.HasPrefix(r.Header.Get("User-Agent"), "Lavf/")
+	// Read intent flows in on the URL: &class=playback|ahead|cold|patient (and, from Phase 2,
+	// &deadline=<unixMillis>). Legacy &bg=1 → ahead-demux for one release; missing/unknown → playback.
+	readClass, readDeadline := readClassFromRequest(r)
 
 	cache, ok := h.Engine.Storage.GetCache(infoHash)
 	if !ok {
@@ -86,10 +133,10 @@ func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 		h.headersCache.Store(fileCacheKey, fh)
 	}
 
-	// 1. If it's a raw stream or read by ffmpeg direct analyzer, serve progressive bytes
-	if isRaw || isFFmpeg {
-		slog.Debug("Serving raw/ffmpeg stream", "path", file.Path(), "offset", file.Offset(), "length", file.Length())
-		rawReader := storage.NewReader(r.Context(), t, cache, file.Offset(), file.Length())
+	// 1. Explicit raw request → serve progressive bytes straight from the cache.
+	if isRaw {
+		slog.Debug("Serving raw stream", "path", file.Path(), "offset", file.Offset(), "length", file.Length())
+		rawReader := storage.NewReader(r.Context(), t, cache, file.Offset(), file.Length(), readClass, readDeadline)
 		defer rawReader.Close()
 		reader := NewCachingReader(rawReader, file.Length(), fh)
 
@@ -118,84 +165,11 @@ func (h *HandlerContext) HandleStream(w http.ResponseWriter, r *http.Request) {
 		go h.preloadHeadersToCache(hashHex, fileIndexStr, file, cache, t)
 	}
 
-	// 3. Check if dynamic fMP4 remuxing is requested or required
-	audioParam := r.URL.Query().Get("audio")
-	startParam := r.URL.Query().Get("start")
-	remuxParam := r.URL.Query().Get("remux") == "true"
-
-	if audioParam != "" || startParam != "" || remuxParam {
-		if _, err := exec.LookPath(h.ffmpegPath); err == nil {
-			localStreamURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
-
-			w.Header().Set("Content-Type", "video/mp4")
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
-			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			w.Header().Set("Pragma", "no-cache")
-			w.Header().Set("Expires", "0")
-
-			args := []string{"-nostdin"}
-			if startParam != "" {
-				args = append(args, "-noaccurate_seek", "-ss", startParam)
-			}
-			if checkReadrateSupport(h.ffmpegPath) {
-				args = append(args, "-readrate", "3.5")
-			}
-			if strings.HasPrefix(localStreamURL, "https://") {
-				args = append(args, "-tls_verify", "0")
-			}
-			args = append(args, "-i", localStreamURL)
-			args = append(args, "-map", "0:v:0")
-
-			if audioParam != "" && audioParam != "0" && audioParam != "default" {
-				args = append(args, "-map", fmt.Sprintf("0:%s", audioParam))
-			} else {
-				args = append(args, "-map", "0:a:0?")
-			}
-
-			fileExt := strings.ToLower(filepath.Ext(file.Path()))
-			if fileExt == ".avi" {
-				args = append(args,
-					"-c:v", "libx264",
-					"-preset", "ultrafast",
-					"-profile:v", "baseline",
-					"-level", "3.0",
-					"-pix_fmt", "yuv420p",
-				)
-			} else {
-				args = append(args, "-c:v", "copy")
-			}
-
-			args = append(args,
-				"-c:a", "aac",
-				"-af", "aresample=async=1",
-				"-copyts",
-				"-f", "mp4",
-				"-movflags", "frag_keyframe+empty_moov",
-				"-",
-			)
-
-			cmd := exec.CommandContext(r.Context(), h.ffmpegPath, args...)
-			cmd.Stdout = w
-			cmd.Stderr = nil
-
-			if err := cmd.Start(); err != nil {
-				slog.Error("Failed to spawn ffmpeg remuxer", "error", err)
-				http.Error(w, "ffmpeg spawn failed", http.StatusInternalServerError)
-				return
-			}
-
-			if err := cmd.Wait(); err != nil {
-				if r.Context().Err() == nil {
-					slog.Warn("ffmpeg remuxer completed with error", "error", err)
-				}
-			}
-			return
-		}
-	}
-
-	// 4. Fallback: serve progressive bytes using custom storage reader
-	rawReader := storage.NewReader(r.Context(), t, cache, file.Offset(), file.Length())
+	// 3. Serve progressive bytes using the custom storage reader. Adaptive/remuxed playback is handled
+	// entirely by the in-process HLS pipeline (see media/ + hlsmedia.go); this endpoint is now just a
+	// direct progressive download of the container. Legacy ?audio/?start/?remux params are ignored — the
+	// dumb player no longer sends them (it consumes a ready HLS descriptor instead).
+	rawReader := storage.NewReader(r.Context(), t, cache, file.Offset(), file.Length(), readClass, readDeadline)
 	defer rawReader.Close()
 	reader := NewCachingReader(rawReader, file.Length(), fh)
 
@@ -345,7 +319,7 @@ func (h *HandlerContext) preloadHeadersToCache(hashHex, fileIndexStr string, fil
 	if startMax > fileSize {
 		startMax = fileSize
 	}
-	endMin := fileSize - int64(8 * 1024 * 1024)
+	endMin := fileSize - int64(8*1024*1024)
 	if endMin < 0 {
 		endMin = 0
 	}
@@ -365,7 +339,7 @@ func (h *HandlerContext) preloadHeadersToCache(hashHex, fileIndexStr string, fil
 
 	// 1. Read first 8MB without lock
 	if !hasStart {
-		reader := storage.NewReader(ctx, t, cache, file.Offset(), fileSize)
+		reader := storage.NewReader(ctx, t, cache, file.Offset(), fileSize, storage.ClassColdProbe, time.Time{}) // header prefetch: probe-shaped, yields to the player
 		buf := make([]byte, startMax)
 		n, err := io.ReadFull(reader, buf)
 		reader.Close()
@@ -382,7 +356,7 @@ func (h *HandlerContext) preloadHeadersToCache(hashHex, fileIndexStr string, fil
 
 	// 2. Read last 8MB without lock
 	if !hasEnd {
-		reader := storage.NewReader(ctx, t, cache, file.Offset(), fileSize)
+		reader := storage.NewReader(ctx, t, cache, file.Offset(), fileSize, storage.ClassColdProbe, time.Time{}) // footer prefetch: probe-shaped, yields to the player
 		_, err := reader.Seek(endMin, io.SeekStart)
 		if err == nil {
 			buf := make([]byte, fileSize-endMin)
@@ -402,23 +376,4 @@ func (h *HandlerContext) preloadHeadersToCache(hashHex, fileIndexStr string, fil
 			reader.Close()
 		}
 	}
-}
-
-var (
-	supportsReadrate     bool
-	supportsReadrateOnce sync.Once
-)
-
-func checkReadrateSupport(ffmpegPath string) bool {
-	supportsReadrateOnce.Do(func() {
-		cmd := exec.Command(ffmpegPath, "-readrate", "1.0", "-h")
-		if err := cmd.Run(); err == nil {
-			supportsReadrate = true
-			slog.Info("ffmpeg supports -readrate option")
-		} else {
-			supportsReadrate = false
-			slog.Warn("ffmpeg does not support -readrate option; omitting readrate limit")
-		}
-	})
-	return supportsReadrate
 }

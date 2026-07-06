@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
@@ -12,9 +13,11 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 )
 
-// hlsSegmentSeconds is the target segment length. Kept moderate so the playlist isn't enormous and
-// each on-demand segment is quick to produce.
-const hlsSegmentSeconds = 4.0
+// hlsSegmentSeconds is the target segment length. For the COPY path this is a MINIMUM — computeSegList
+// still cuts on real keyframes, so sparse-keyframe (typical WEB-DL) copy segments stay GOP-length; it only
+// bites the transcode (uniform, forced-keyframe) path + dense-keyframe copy. 6s is the HLS norm: ~3x fewer
+// demux/seek/transcode calls than 2s (each segment is a fresh in-process produce) and fewer forced keyframes.
+const hlsSegmentSeconds = 6.0
 
 // segList is the deterministic segmentation of a file: a fixed list of content-time boundaries used
 // to render the VOD playlist and to position the ffmpeg producer. For H.264 with a readable
@@ -76,43 +79,79 @@ func (h *HandlerContext) buildSegList(ctx context.Context, hashHex, fileIndexStr
 		return nil, fmt.Errorf("duration unavailable: %w", err)
 	}
 
-	// Only H.264 can be copied; anything else must transcode (browser can't decode it in MSE).
-	isH264 := h.probeVideoCodec(ctx, hashHex, fileIndexStr) == "h264"
+	// Probe the stream layout IN-PROCESS (libav, no ffprobe subprocess). The video codec + source
+	// start-PTS drive the grid: only H.264 gets the keyframe-aligned COPY grid; anything else is a uniform
+	// grid that media/ transcodes segment-by-segment.
+	layout, lerr := h.getStreamLayout(ctx, hashHex, fileIndexStr)
+	if lerr != nil {
+		return uniformSegList(dur, 0), nil // probe failed → safest is a uniform (transcode) grid from 0
+	}
 
-	if isH264 {
+	if layout.videoCodec == "h264" {
 		if sl := h.tryIndexSegList(ctx, hashHex, fileIndexStr, dur); sl != nil {
 			return sl, nil
 		}
 	}
-	// Fallback: uniform boundaries, producer transcodes with forced keyframes so cuts line up.
-	return uniformSegList(dur, h.videoStartPTS(ctx, hashHex, fileIndexStr)), nil
+	// Uniform boundaries from the video's start-PTS; media/ transcodes each segment with an IDR-led start.
+	return uniformSegList(dur, layout.videoStartSec), nil
 }
 
-// tryIndexSegList reads the container keyframe index (moov / Cues) and derives keyframe-aligned
-// boundaries. Returns nil (→ caller falls back to transcode) when the index is unavailable.
-func (h *HandlerContext) tryIndexSegList(ctx context.Context, hashHex, fileIndexStr string, dur float64) *segList {
-	rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	rs, ext, err := h.openTorrentFileReader(rctx, hashHex, fileIndexStr)
-	if err != nil {
-		return nil
-	}
-	defer rs.Close()
+const (
+	// Bounded wait for a container keyframe index to become READABLE. MKV Cues live at the file tail, so
+	// on a just-added torrent the read fails (truncated → parse error) until those (priority-boosted)
+	// pieces arrive. We retry for this long before giving up and transcoding, so a file with a valid index
+	// lands on the fast copy path instead of transcoding the whole session.
+	indexReadDeadline   = 25 * time.Second
+	indexReadRetryEvery = 1 * time.Second
+)
 
-	var kfs []float64
-	var ok bool
-	switch ext {
-	case ".mp4", ".mov", ".m4v":
-		kfs, ok, err = mp4Keyframes(rs)
-	case ".mkv", ".webm":
-		kfs, ok, err = mkvKeyframes(rs)
-	default:
-		return nil
+// tryIndexSegList reads the container keyframe index (MP4 moov / MKV Cues) and derives keyframe-aligned
+// boundaries so an H.264 file is COPIED, not transcoded. Returns nil (→ caller transcodes) only when the
+// container genuinely has no usable index. When the index is PRESENT but not yet readable (its bytes —
+// the tail for MKV — haven't downloaded, which reads back as a parse error), it retries for a bounded
+// time so the file moves to the copy path once the tail arrives.
+func (h *HandlerContext) tryIndexSegList(ctx context.Context, hashHex, fileIndexStr string, dur float64) *segList {
+	deadline := time.Now().Add(indexReadDeadline)
+	for {
+		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		rs, ext, err := h.openTorrentFileReader(rctx, hashHex, fileIndexStr, storage.ClassColdProbe)
+		if err != nil {
+			cancel()
+			return nil
+		}
+		var kfs []float64
+		var ok bool
+		switch ext {
+		case ".mp4", ".mov", ".m4v":
+			kfs, ok, err = mp4Keyframes(rs)
+		case ".mkv", ".webm":
+			kfs, ok, err = mkvKeyframes(rs)
+		default:
+			rs.Close()
+			cancel()
+			return nil // non-indexable container → transcode
+		}
+		rs.Close()
+		cancel()
+
+		if err == nil && ok && len(kfs) >= 1 {
+			return computeSegList(kfs, dur) // index read → keyframe-aligned copy grid
+		}
+		if err == nil {
+			return nil // parsed cleanly, no usable index → genuinely must transcode
+		}
+		// err != nil → the index is there but its bytes aren't readable yet (tail still downloading).
+		// Retry until the boosted tail pieces arrive, bounded so a truly unparseable index still falls back.
+		if time.Now().After(deadline) {
+			slog.Warn("keyframe index unreadable in time → transcode grid", "hash", hashHex, "file", fileIndexStr, "ext", ext, "err", err)
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(indexReadRetryEvery):
+		}
 	}
-	if err != nil || !ok || len(kfs) < 1 {
-		return nil
-	}
-	return computeSegList(kfs, dur)
 }
 
 // computeSegList turns a sorted list of source-PTS keyframes + total duration into keyframe-aligned
@@ -151,8 +190,9 @@ func uniformSegList(dur, base float64) *segList {
 	return &segList{contentStarts: starts, contentEnd: contentEnd, base: base, transcode: true}
 }
 
-// openTorrentFileReader returns a seekable reader over a torrent file plus its lowercase extension.
-func (h *HandlerContext) openTorrentFileReader(ctx context.Context, hashHex, fileIndexStr string) (*storage.Reader, string, error) {
+// openTorrentFileReader returns a seekable reader over a torrent file plus its lowercase extension, opened
+// with the given ReadClass (ClassColdProbe for header/index probes, ClassPlayback for segment production).
+func (h *HandlerContext) openTorrentFileReader(ctx context.Context, hashHex, fileIndexStr string, class storage.ReadClass) (*storage.Reader, string, error) {
 	var infoHash metainfo.Hash
 	hexBytes, err := hex.DecodeString(hashHex)
 	if err != nil || len(hexBytes) != 20 {
@@ -184,7 +224,7 @@ func (h *HandlerContext) openTorrentFileReader(ctx context.Context, hashHex, fil
 	if !ok {
 		return nil, "", fmt.Errorf("no storage cache")
 	}
-	rs := storage.NewReader(ctx, t, cache, file.Offset(), file.Length())
+	rs := storage.NewReader(ctx, t, cache, file.Offset(), file.Length(), class, time.Time{})
 	ext := strings.ToLower(filepath.Ext(file.Path()))
 	return rs, ext, nil
 }

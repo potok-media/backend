@@ -3,17 +3,18 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/bits"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 
+	"Potok.Backend.TorrentGo/media"
+	"Potok.Backend.TorrentGo/storage"
 	"github.com/anacrolix/torrent/metainfo"
 )
 
@@ -84,7 +85,6 @@ func (h *HandlerContext) AnalyzeTorrent(hashHex string, videoFiles []parsedFile)
 	rangesMap := make(map[string]*TimecodeRange)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 3) // Concurrency limiter: max 3 parallel ffmpeg extractions
 
 	for i, vf := range videoFiles {
 		wg.Add(1)
@@ -99,9 +99,12 @@ func (h *HandlerContext) AnalyzeTorrent(hashHex string, videoFiles []parsedFile)
 			} else if idx == 1 {
 				epFp = fp2
 			} else {
-				sem <- struct{}{}
+				release, acqErr := h.extExec.Acquire(ctx, extAnalyze)
+				if acqErr != nil {
+					return
+				}
 				epFp, err = h.getEpisodeFingerprint(ctx, hashHex, file)
-				<-sem
+				release()
 				if err != nil {
 					slog.Warn("Analyzer: failed to get fingerprint for episode", "index", idx, "error", err)
 					return
@@ -129,37 +132,32 @@ func (h *HandlerContext) AnalyzeTorrent(hashHex string, videoFiles []parsedFile)
 	slog.Info("Analyzer: successfully cached template-matched intro timecodes for all episodes", "hash", hashHex)
 }
 
+const fpSampleRate = 8000 // fingerprint decode rate (mono), matches fpcalc's -rate
+
 func (h *HandlerContext) getEpisodeFingerprint(ctx context.Context, hashHex string, vf parsedFile) ([]uint32, error) {
 	fileIndexStr := vf.Item.Id
-	
-	// We call ffmpeg to decode the first 8 minutes (480 seconds) of audio to a low-bitrate WAV stream,
-	// and pipe it into fpcalc to get the fingerprint.
-	// We use the loopback stream URL.
-	streamURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
 
-	// We set a strict timeout on the ffmpeg extraction process to avoid hanging
+	// Strict timeout so a cold seek can't hang the background analysis.
 	extractCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
 	defer cancel()
 
-	// ffmpeg extracts 8 minutes of audio and outputs it to stdout
-	args := []string{
-		"-nostdin",
-		"-ss", "0",
-		"-t", "480",
+	// Decode the first 8 minutes (480s) of audio to mono S16 PCM IN-PROCESS (libav over the torrent cache,
+	// no ffmpeg subprocess / loopback stream), then wrap it in a WAV header and pipe it into fpcalc —
+	// Chromaprint has no in-process Go equivalent, so it stays a subprocess, but it now reads a plain
+	// in-memory WAV instead of a live ffmpeg pipe.
+	rs, _, err := h.openTorrentFileReader(extractCtx, hashHex, fileIndexStr, storage.ClassAheadDemux)
+	if err != nil {
+		return nil, fmt.Errorf("open torrent file: %w", err)
 	}
-	if strings.HasPrefix(streamURL, "https://") {
-		args = append(args, "-tls_verify", "0")
-	}
-	args = append(args,
-		"-i", streamURL,
-		"-ac", "1",
-		"-ar", "8000",
-		"-f", "wav",
-		"-",
-	)
-	ffmpegCmd := exec.CommandContext(extractCtx, h.ffmpegPath, args...)
+	defer rs.Close()
 
-	// fpcalc reads wav from stdin and outputs raw json fingerprint
+	pcm, err := media.AudioPCM(extractCtx, rs, 0, 480, fpSampleRate)
+	if err != nil {
+		return nil, fmt.Errorf("decode audio: %w", err)
+	}
+	wav := wrapWAVMono16(pcm, fpSampleRate)
+
+	// fpcalc reads the WAV from stdin and outputs the raw fingerprint as JSON.
 	fpcalcCmd := exec.CommandContext(extractCtx, "fpcalc",
 		"-rate", "8000",
 		"-channels", "1",
@@ -168,33 +166,11 @@ func (h *HandlerContext) getEpisodeFingerprint(ctx context.Context, hashHex stri
 		"-json",
 		"-",
 	)
-
-	// Pipe ffmpeg stdout to fpcalc stdin
-	pipeReader, pipeWriter := io.Pipe()
-	ffmpegCmd.Stdout = pipeWriter
-	fpcalcCmd.Stdin = pipeReader
-
+	fpcalcCmd.Stdin = bytes.NewReader(wav)
 	var fpOutput bytes.Buffer
 	fpcalcCmd.Stdout = &fpOutput
 
-	if err := ffmpegCmd.Start(); err != nil {
-		pipeWriter.Close()
-		return nil, fmt.Errorf("failed to start ffmpeg: %w", err)
-	}
-
-	if err := fpcalcCmd.Start(); err != nil {
-		pipeWriter.Close()
-		_ = ffmpegCmd.Wait()
-		return nil, fmt.Errorf("failed to start fpcalc: %w", err)
-	}
-
-	// Wait for ffmpeg in a goroutine to close the pipeWriter
-	go func() {
-		_ = ffmpegCmd.Wait()
-		pipeWriter.Close()
-	}()
-
-	if err := fpcalcCmd.Wait(); err != nil {
+	if err := fpcalcCmd.Run(); err != nil {
 		return nil, fmt.Errorf("fpcalc failed: %w", err)
 	}
 
@@ -204,6 +180,35 @@ func (h *HandlerContext) getEpisodeFingerprint(ctx context.Context, hashHex stri
 	}
 
 	return res.Fingerprint, nil
+}
+
+// wrapWAVMono16 prepends the canonical 44-byte PCM WAV header to interleaved mono S16LE samples so fpcalc
+// (which auto-detects the container) reads them at the right rate/format.
+func wrapWAVMono16(pcm []byte, sampleRate int) []byte {
+	const (
+		channels      = 1
+		bitsPerSample = 16
+	)
+	byteRate := sampleRate * channels * bitsPerSample / 8
+	blockAlign := channels * bitsPerSample / 8
+	dataLen := len(pcm)
+
+	buf := make([]byte, 0, 44+dataLen)
+	buf = append(buf, "RIFF"...)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(36+dataLen))
+	buf = append(buf, "WAVE"...)
+	buf = append(buf, "fmt "...)
+	buf = binary.LittleEndian.AppendUint32(buf, 16) // PCM fmt chunk size
+	buf = binary.LittleEndian.AppendUint16(buf, 1)  // audio format = PCM
+	buf = binary.LittleEndian.AppendUint16(buf, channels)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(sampleRate))
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(byteRate))
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(blockAlign))
+	buf = binary.LittleEndian.AppendUint16(buf, bitsPerSample)
+	buf = append(buf, "data"...)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(dataLen))
+	buf = append(buf, pcm...)
+	return buf
 }
 
 func findIntroMatch(fp1, fp2 []uint32) (idxStart1, idxEnd1 int, found bool) {

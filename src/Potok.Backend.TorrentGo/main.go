@@ -17,6 +17,7 @@ import (
 	"Potok.Backend.TorrentGo/bt"
 	"Potok.Backend.TorrentGo/config"
 	"Potok.Backend.TorrentGo/handlers"
+	"Potok.Backend.TorrentGo/media"
 	"Potok.Backend.TorrentGo/speed"
 	"Potok.Backend.TorrentGo/storage"
 	"github.com/go-chi/chi/v5"
@@ -50,14 +51,14 @@ func CORSMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		
+
 		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
 		if reqHeaders != "" {
 			w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
 		} else {
 			w.Header().Set("Access-Control-Allow-Headers", "*")
 		}
-		
+
 		w.Header().Set("Access-Control-Allow-Private-Network", "true")
 		w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
 		if r.Method == "OPTIONS" {
@@ -87,6 +88,14 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 
 	slog.Info("Starting Potok Go Torrent Engine v2...")
+	// In-process media core (go-astiav → libav*) link check. Forces the binary to dynamically load the
+	// ffmpeg shared libs at startup, so a broken LD_LIBRARY_PATH / SONAME mismatch surfaces here loudly
+	// rather than on the first segment request.
+	if media.LibavLinked() {
+		slog.Info("libav linked — in-process media core available")
+	} else {
+		slog.Warn("libav NOT linked — in-process media core unavailable")
+	}
 	raiseRlimit()
 
 	// Soft Go-heap ceiling (POTOK_MEM_LIMIT_MB): the runtime GCs harder as it approaches this,
@@ -116,24 +125,24 @@ func main() {
 	// Handler Context
 	hCtx := handlers.NewHandlerContext(engine, sm, cfg, ts)
 
-	// Reap idle torrents (no status-poll heartbeat past the timeout) → frees their RAM automatically.
-	go hCtx.ReapIdleTorrents()
+	// Playback-session lifecycle: expire lapsed keepalives, cancel unreferenced producers, drop
+	// torrents nobody is watching (refcount over sessions — replaces the old idle-timeout heuristics).
+	go hCtx.ReapPlaybackSessions()
 
 	// 4. Setup router
 	r := chi.NewRouter()
-	
-    r.Use(CORSMiddleware)
+
+	r.Use(CORSMiddleware)
 	r.Use(middleware.Recoverer)
 	r.Use(func(next http.Handler) http.Handler {
-    	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-    		if req.URL.Path == "/health" || req.URL.Path == "/health/" {
-    			next.ServeHTTP(w, req)
-    			return
-    		}
-    		middleware.Logger(next).ServeHTTP(w, req)
-    	})
-    })
-	
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if req.URL.Path == "/health" || req.URL.Path == "/health/" {
+				next.ServeHTTP(w, req)
+				return
+			}
+			middleware.Logger(next).ServeHTTP(w, req)
+		})
+	})
 
 	// Ensure CORS is set on 404 and 405 responses
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
@@ -167,9 +176,7 @@ func main() {
 			r.Get("/{hash}/files/{fileIndex}/metadata", hCtx.HandleGetMediaMetadata)
 			r.Get("/{hash}/files/{fileIndex}/thumbnail", hCtx.HandleGetThumbnail)
 			r.Get("/{hash}/files/{fileIndex}/subtitles/{trackIndex}", hCtx.HandleGetSubtitles)
-			r.Get("/{hash}/files/{fileIndex}/hls/{res}", hCtx.HandleHls)
-			// Player teardown (navigator.sendBeacon on close/leave) — kills the file's ffmpeg producer now.
-			r.Post("/{hash}/files/{fileIndex}/hls/stop", hCtx.HandleStopHls)
+			r.Get("/{hash}/files/{fileIndex}/hls/*", hCtx.HandleHls)
 
 			// RESTful Streaming sub-routes
 			r.Get("/{hash}/files/{fileIndex}/stream", hCtx.HandleStream)
@@ -177,6 +184,11 @@ func main() {
 			r.Head("/{hash}/files/{fileIndex}/stream", hCtx.HandleStream)
 			r.Head("/{hash}/files/{fileIndex}/stream/{filename}", hCtx.HandleStream)
 		})
+
+		// Playback-session lifecycle (Jellyfin/Plex-style keepalive) — presence that owns torrent +
+		// ffmpeg-producer lifetime by refcount. Kept top-level (session-centric, not per-hash).
+		r.Post("/api/playback/keepalive", hCtx.HandlePlaybackKeepalive)
+		r.Post("/api/playback/stop", hCtx.HandlePlaybackStop)
 
 		// Backward compatibility for /stream routes
 		r.Get("/stream/{hash}/{fileIndex}", hCtx.HandleStream)

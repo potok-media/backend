@@ -1,18 +1,18 @@
 package handlers
 
 import (
-	"bytes"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"math"
 	"net/http"
-	"os/exec"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
+	"Potok.Backend.TorrentGo/media"
+	"Potok.Backend.TorrentGo/storage"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/sync/singleflight"
@@ -165,54 +165,35 @@ func (h *HandlerContext) HandleGetThumbnail(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if _, err := exec.LookPath(h.ffmpegPath); err != nil {
-		http.Error(w, "ffmpeg not found", http.StatusInternalServerError)
-		return
-	}
-
-	// Execute through singleflight
+	// Execute through singleflight (coalesce concurrent requests for the same rounded time).
 	resultVal, err, _ := h.ThumbService.sfg.Do(cacheKey, func() (interface{}, error) {
-		// Double check cache in case a parallel execution finished and stored it
 		if data, found := h.ThumbService.cache.Get(cacheKey); found {
 			return data, nil
 		}
 
-		// Cap concurrent thumbnail ffmpeg jobs; bail if the client goes away while queued (a scrub
-		// abandons most hovered positions, so their requests cancel here instead of piling up ffmpeg).
-		select {
-		case h.thumbnailSem <- struct{}{}:
-			defer func() { <-h.thumbnailSem }()
-		case <-r.Context().Done():
-			return nil, r.Context().Err()
+		// Admit as a window-class extraction; a scrub abandons most hovered positions, so they cancel here
+		// (while QUEUED) instead of piling up in-process decode/encode work.
+		release, acqErr := h.extExec.Acquire(r.Context(), extWindow)
+		if acqErr != nil {
+			return nil, acqErr
 		}
+		defer release()
 
-		localStreamURL := h.getLoopbackURL(fmt.Sprintf("/api/torrents/%s/files/%s/stream?raw=true", hashHex, fileIndexStr))
+		// Detached from the leader's ctx (singleflight shares it) + time-capped so a cold seek can't pin a slot.
+		extractCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
 
-		var buf bytes.Buffer
-		var stderr bytes.Buffer
-		args := []string{"-nostdin"}
-		args = append(args, h.videoAccel.inputArgs()...) // HW-decode the keyframe (HEVC 10-bit is costly in software)
-		args = append(args, "-ss", strconv.Itoa(roundedTime))
-		if strings.HasPrefix(localStreamURL, "https://") {
-			args = append(args, "-tls_verify", "0")
+		rs, _, oerr := h.openTorrentFileReader(extractCtx, hashHex, fileIndexStr, storage.ClassAheadDemux)
+		if oerr != nil {
+			return nil, oerr
 		}
-		args = append(args,
-			"-i", localStreamURL,
-			"-vframes", "1",
-			"-s", "160x90",
-			"-f", "image2",
-			"-",
-		)
-		cmd := exec.CommandContext(r.Context(), h.ffmpegPath, args...)
-		cmd.Stdout = &buf
-		cmd.Stderr = &stderr
+		defer rs.Close()
 
-		if err := cmd.Run(); err != nil {
-			slog.Error("FFmpeg thumbnail extraction failed", "error", err, "stderr", stderr.String())
-			return nil, fmt.Errorf("ffmpeg failed: %w", err)
+		data, terr := media.Thumbnail(extractCtx, rs, float64(roundedTime), 160, 90)
+		if terr != nil {
+			slog.Error("thumbnail extraction failed", "hash", hashHex, "file", fileIndexStr, "error", terr)
+			return nil, terr
 		}
-
-		data := buf.Bytes()
 		h.ThumbService.cache.Set(cacheKey, data)
 		return data, nil
 	})

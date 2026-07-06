@@ -28,51 +28,50 @@ type parsedFile struct {
 }
 
 type HandlerContext struct {
-	Engine            *bt.Engine
-	SpeedMonitor      *speed.Monitor
-	Config            *config.Config
-	ThumbService      *ThumbnailService
-	durationCache     sync.Map // map[string]float64
-	timecodeCache     sync.Map // map[string]map[string]*TimecodeRange
-	metadataCache     sync.Map // map[string][]byte
-	headersCache      sync.Map // map[string]*FileHeaders
-	metadataSFG       singleflight.Group
-	hlsVideoCodec     sync.Map // map[string]string — cached video codec per file (h264 → copy)
-	hlsVideoStartPTS  sync.Map // map[string]float64 — cached first video PTS (source offset) per file
-	hlsSegList        sync.Map // map[string]*segList — cached VOD segmentation per file
-	hlsSessions       sync.Map // map[string]*hlsSession — one repositionable ffmpeg muxer per (file,audio)
-	hlsSegCache       segCache // LRU of produced segment bytes — serving source, decoupled from sessions
-	hlsReaperOnce     sync.Once
-	lastSeen          sync.Map // map[hash]time.Time — heartbeat from the client's status poll; drives the idle reaper
-	subtitleCache     sync.Map // map[hash_file_relIndex_format][]byte — extracted subtitle text; one demux per file, served forever
-	subtitleExtracted sync.Map // map[hash_file]bool — marks a file's one-pass subtitle extraction as already done
+	Engine          *bt.Engine
+	SpeedMonitor    *speed.Monitor
+	Config          *config.Config
+	ThumbService    *ThumbnailService
+	durationCache   sync.Map // map[string]float64
+	timecodeCache   sync.Map // map[string]map[string]*TimecodeRange
+	metadataCache   sync.Map // map[string][]byte
+	headersCache    sync.Map // map[string]*FileHeaders
+	metadataSFG     singleflight.Group
+	hlsSegList      sync.Map // map[string]*segList — cached VOD segmentation per file
+	hlsStreamLayout sync.Map // map[string]*streamLayout — cached source stream indices (video + audios) per file
+	hlsSegCache     segCache // LRU of produced segment bytes — serving source, decoupled from sessions
+	// One lock over the torrent lifecycle: playback sessions + the drop grace clock. Single owner of that
+	// state (anacrolix/Jellyfin shape), so the old Delete-outside-lock / LoadOrStore-before-lock races
+	// can't recur. Rule: hold it only to read/mutate these maps; do the blocking torrent Drop OUTSIDE it.
+	lifecycleMu       sync.Mutex
+	playback          map[string]*playSession // sessionId → what a live player is watching (see playback.go)
+	torrentSeen       map[string]time.Time    // hash → last time it had ≥1 session; grace clock for drop
+	dropping          map[string]bool         // hash → a drop is in flight; makes dropTorrent idempotent (reaper vs DELETE)
+	subtitleCache     sync.Map                // map[hash_file_relIndex_format][]byte — extracted subtitle text; one demux per file, served forever
+	subtitleExtracted sync.Map                // map[hash_file]bool — marks a file's one-pass subtitle extraction as already done
 	subtitleSFG       singleflight.Group
-	subtitleSem       chan struct{} // caps concurrent subtitle extractions (heavy full-file demux) to keep CPU/heat down
-	thumbnailSem      chan struct{} // caps concurrent thumbnail ffmpeg jobs — a timeline scrub spawns a burst
-	ffmpegPath        string
-	ffprobePath       string
-	videoAccel        *hwAccel // chosen H.264 transcode backend (nil = software libx264)
+	subtitleWinBad    sync.Map     // map[hash_file]bool — windowed seek yielded nothing (no index); force the full-file path
+	extExec           *extExecutor // one admission controller for ALL in-process extraction (window/heavy/analyze)
 }
 
 func NewHandlerContext(engine *bt.Engine, sm *speed.Monitor, cfg *config.Config, ts *ThumbnailService) *HandlerContext {
 	hc := &HandlerContext{
-		Engine:            engine,
-		SpeedMonitor:      sm,
-		Config:            cfg,
-		ThumbService:      ts,
+		Engine:       engine,
+		SpeedMonitor: sm,
+		Config:       cfg,
+		ThumbService: ts,
 	}
 	if cfg != nil && cfg.HlsCacheBytes > 0 {
 		hc.hlsSegCache.maxBytes = cfg.HlsCacheBytes
 	}
-	// Serialize subtitle extraction: it's a one-time, cached full-file demux per file — running
-	// several at once is what pegged the CPU. One at a time keeps the box cool; cache makes it rare.
-	hc.subtitleSem = make(chan struct{}, 1)
-	// Timeline scrubbing fires one thumbnail request per hovered position; cap how many ffmpeg jobs
-	// run at once so a scrub can't spawn a process storm (the subtitle path caps at 1; thumbnails are
-	// lighter, especially with HW decode, so a couple in parallel is fine).
-	hc.thumbnailSem = make(chan struct{}, 2)
-	hc.ffmpegPath, hc.ffprobePath = resolveFFmpegBinaries()
-	hc.videoAccel = detectVideoAccel(hc.ffmpegPath)
+	// One admission controller for every in-process extraction, per-class limits: window (subtitle window +
+	// thumbnail: cheap seek+read, a few in parallel), heavy (full-file demux: serialized — that's what
+	// pegged the CPU), analyze (fingerprint decode). Replaces the four disjoint channel semaphores so a
+	// slot is never held across a starvable read and pools can't leak into each other.
+	hc.extExec = newExtExecutor(3, 1, 3)
+	hc.playback = make(map[string]*playSession)
+	hc.torrentSeen = make(map[string]time.Time)
+	hc.dropping = make(map[string]bool)
 	return hc
 }
 
@@ -153,9 +152,12 @@ func (h *HandlerContext) HandleGetFiles(w http.ResponseWriter, r *http.Request) 
 	}
 
 	hashHex := t.InfoHash().HexString()
-	// Grace heartbeat for a freshly-resolved torrent so the reaper doesn't drop it before the
-	// client starts its status polling.
-	h.lastSeen.Store(hashHex, time.Now())
+	// Lifetime is owned by playback sessions (playback.go). A just-added torrent has no session yet, so
+	// start its grace clock now — if the user browses and leaves without playing, the sweeper drops it
+	// after torrentGrace; if they play, the first keepalive takes over as the owner.
+	h.lifecycleMu.Lock()
+	h.torrentSeen[hashHex] = time.Now()
+	h.lifecycleMu.Unlock()
 	videoExtensions := map[string]bool{
 		".mkv": true,
 		".mp4": true,
@@ -238,10 +240,7 @@ func (h *HandlerContext) HandleGetStatus(w http.ResponseWriter, r *http.Request)
 	}
 	copy(infoHash[:], hexBytes)
 
-	// Heartbeat: the client polls this endpoint while the torrent is in use. As long as polls keep
-	// arriving the idle reaper leaves it alone; when they stop (player/page closed) it gets dropped.
-	h.lastSeen.Store(hashHex, time.Now())
-
+	// Pure UI stats now (peers/speed/progress) — lifetime is owned by playback sessions, not this poll.
 	t, ok := h.Engine.Client.Torrent(infoHash)
 	if !ok {
 		http.Error(w, "Torrent not found", http.StatusNotFound)
@@ -296,21 +295,31 @@ func (h *HandlerContext) HandleDeleteTorrent(w http.ResponseWriter, r *http.Requ
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-// dropTorrent force-tears-down a torrent and frees ALL of its memory: kills its HLS ffmpeg
-// producers (closing their loopback readers), closes+removes its piece cache, drops it from the
-// client, and purges every per-file cache. Used by both the idle reaper and the DELETE endpoint.
+// dropTorrent force-tears-down a torrent and frees ALL of its memory: purges its playback sessions,
+// closes+removes its piece cache, drops it from the client, and purges every per-file cache. Used by both
+// the idle reaper and the DELETE endpoint.
 func (h *HandlerContext) dropTorrent(infoHash metainfo.Hash, hashHex string) {
-	h.purgeHlsSessions(hashHex) // cancel ffmpeg first so its loopback readers unwind
-	if cache, ok := h.Engine.Storage.GetCache(infoHash); ok {
-		_ = cache.Close()
-		h.Engine.Storage.DeleteCache(infoHash)
-	}
-	if t, ok := h.Engine.Client.Torrent(infoHash); ok {
-		t.Drop()
-	}
-	// Per-file caches that purgeHlsSessions doesn't cover — otherwise these never get freed.
 	prefix := hashHex + "_"
-	for _, m := range []*sync.Map{&h.metadataCache, &h.durationCache, &h.headersCache, &h.subtitleCache, &h.subtitleExtracted} {
+
+	// One serialized owner step: claim the drop (idempotent vs reaper+DELETE), purge this hash's playback
+	// sessions, and clear the grace clock — all under the lock.
+	h.lifecycleMu.Lock()
+	if h.dropping[hashHex] {
+		h.lifecycleMu.Unlock()
+		return
+	}
+	h.dropping[hashHex] = true
+	// Purge playback sessions for this hash so a re-add doesn't inherit phantom refcounts.
+	for id, ps := range h.playback {
+		if ps.hash == hashHex {
+			delete(h.playback, id)
+		}
+	}
+	delete(h.torrentSeen, hashHex)
+	h.lifecycleMu.Unlock()
+
+	// Per-file caches (segmentation/codec/PTS/subtitles/metadata/segment bytes).
+	for _, m := range []*sync.Map{&h.metadataCache, &h.durationCache, &h.headersCache, &h.subtitleCache, &h.subtitleExtracted, &h.subtitleWinBad, &h.hlsSegList, &h.hlsStreamLayout} {
 		m.Range(func(k, _ interface{}) bool {
 			if key, _ := k.(string); strings.HasPrefix(key, prefix) {
 				m.Delete(k)
@@ -319,42 +328,24 @@ func (h *HandlerContext) dropTorrent(infoHash metainfo.Hash, hashHex string) {
 		})
 	}
 	h.timecodeCache.Delete(hashHex)
-	h.lastSeen.Delete(hashHex)
-	slog.Info("torrent dropped", "hash", hashHex)
-}
+	h.hlsSegCache.purgePrefix(prefix)
 
-// ReapIdleTorrents drops torrents whose client heartbeat (the status poll) has gone silent past the
-// idle timeout — the automatic replacement for a client-sent DELETE. Runs for the process lifetime.
-func (h *HandlerContext) ReapIdleTorrents() {
-	ticker := time.NewTicker(20 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		timeout := h.Config.TorrentIdleTimeout
-		if timeout <= 0 {
-			continue
+	// Close (sets closed=true → no resurrection) then Drop; both can block on the torrent client's own
+	// goroutines, so run them detached — the lifecycle state is already consistent. Clear `dropping`
+	// after, keeping a re-drop from racing the slow teardown.
+	go func() {
+		if cache, ok := h.Engine.Storage.GetCache(infoHash); ok {
+			_ = cache.Close()
+			h.Engine.Storage.DeleteCache(infoHash)
 		}
-		now := time.Now()
-		for _, t := range h.Engine.Client.Torrents() {
-			hashHex := t.InfoHash().HexString()
-			v, ok := h.lastSeen.Load(hashHex)
-			if !ok {
-				// No heartbeat recorded yet — grant a grace window rather than dropping immediately.
-				h.lastSeen.Store(hashHex, now)
-				continue
-			}
-			if now.Sub(v.(time.Time)) > timeout {
-				h.dropTorrent(t.InfoHash(), hashHex)
-			}
+		if t, ok := h.Engine.Client.Torrent(infoHash); ok {
+			t.Drop()
 		}
-	}
-}
-
-func (h *HandlerContext) getLoopbackURL(path string) string {
-	var authPrefix string
-	if h.Config.AuthUser != "" {
-		authPrefix = fmt.Sprintf("%s:%s@", h.Config.AuthUser, h.Config.AuthPass)
-	}
-	return fmt.Sprintf("http://%s127.0.0.1:%d%s", authPrefix, h.Config.Port, path)
+		h.lifecycleMu.Lock()
+		delete(h.dropping, hashHex)
+		h.lifecycleMu.Unlock()
+		slog.Info("torrent dropped", "hash", hashHex)
+	}()
 }
 
 func (h *HandlerContext) HandleGetDiagnostics(w http.ResponseWriter, r *http.Request) {

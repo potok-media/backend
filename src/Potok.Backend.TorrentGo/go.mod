@@ -5,6 +5,9 @@ go 1.23
 require (
 	github.com/abema/go-mp4 v1.7.1
 	github.com/anacrolix/torrent v1.58.0
+	github.com/asticode/go-astiav v0.39.0
+	github.com/asticode/go-astikit v0.59.0
+	github.com/asticode/go-astisub v0.41.0
 	github.com/go-chi/chi/v5 v5.0.12
 	github.com/remko/go-mkvparse v0.14.0
 	golang.org/x/sync v0.8.0
@@ -29,6 +32,7 @@ require (
 	github.com/anacrolix/sync v0.5.1 // indirect
 	github.com/anacrolix/upnp v0.1.4 // indirect
 	github.com/anacrolix/utp v0.1.0 // indirect
+	github.com/asticode/go-astits v1.8.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/benbjohnson/immutable v0.3.0 // indirect
 	github.com/bits-and-blooms/bitset v1.2.2 // indirect
@@ -82,6 +86,7 @@ require (
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
 	golang.org/x/net v0.29.0 // indirect
 	golang.org/x/sys v0.26.0 // indirect
+	golang.org/x/text v0.19.0 // indirect
 	golang.org/x/time v0.0.0-20220609170525-579cf78fd858 // indirect
 	lukechampine.com/blake3 v1.1.6 // indirect
 	modernc.org/libc v1.22.3 // indirect

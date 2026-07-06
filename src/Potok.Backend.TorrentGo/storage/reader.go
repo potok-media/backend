@@ -23,9 +23,15 @@ type Reader struct {
 	closeCh      chan struct{}
 	closeOnce    sync.Once
 	ctx          context.Context
+	// class describes WHY this read happens (playback / ahead-demux / probe / patient) and maps to a
+	// single policy: piece priority, read-ahead window, and per-block wait budget. waitDeadline is the
+	// caller's hard op deadline (zero = none); the reader waits min(policy budget, until(deadline)) so
+	// an inner wait can never outlive its caller's outer ffmpeg cap. Both immutable after construction.
+	class        ReadClass
+	waitDeadline time.Time
 }
 
-func NewReader(ctx context.Context, t *torrent.Torrent, cache *Cache, fileOffset, fileSize int64) *Reader {
+func NewReader(ctx context.Context, t *torrent.Torrent, cache *Cache, fileOffset, fileSize int64, class ReadClass, waitDeadline time.Time) *Reader {
 	r := &Reader{
 		torrent:      t,
 		cache:        cache,
@@ -34,6 +40,8 @@ func NewReader(ctx context.Context, t *torrent.Torrent, cache *Cache, fileOffset
 		lastPieceIdx: -1,
 		closeCh:      make(chan struct{}),
 		ctx:          ctx,
+		class:        class,
+		waitDeadline: waitDeadline,
 	}
 	cache.RegisterReader(r)
 	return r
@@ -55,6 +63,11 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 	fileOffset := r.fileOffset
 	fileSize := r.fileSize
 	r.mu.Unlock()
+
+	// Per-class wait policy. The per-block wait budget is capped by the caller's hard deadline (if
+	// any) inside the wait loop, so an inner block-wait can never outlive the caller's outer op cap
+	// (the old fixed 10-min background wait vs a 45s caller ffmpeg cap was exactly the freeze).
+	pol := r.class.policy()
 
 	slog.Debug("Reader Read called (unlocked)", "len(p)", len(p), "pos", pos, "fileSize", fileSize)
 
@@ -92,7 +105,7 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 		mp := r.cache.GetOrCreateMemPiece(pieceIdx, pieceSize)
 		if !mp.IsComplete() && r.torrent != nil {
 			r.torrent.Piece(pieceIdx).UpdateCompletion()
-			r.torrent.Piece(pieceIdx).SetPriority(torrent.PiecePriorityNow)
+			r.torrent.Piece(pieceIdx).SetPriority(pol.curPrio)
 		}
 
 		r.mu.Lock()
@@ -113,25 +126,34 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 			r.cache.UpdatePriorities(fileStartPiece, fileEndPiece)
 		}
 
-		for !mp.HasRange(pieceOffset, toRead) {
-			watchCh := mp.Watch()
-			if mp.HasRange(pieceOffset, toRead) {
+		// Wait until the block range is available. Re-fetch the piece each iteration and capture its
+		// notify channel atomically with the readiness check (WaitRange), so neither a lost wakeup nor
+		// an eviction+re-download (which swaps in a fresh MemPiece) can strand us.
+		for {
+			mp = r.cache.GetOrCreateMemPiece(pieceIdx, pieceSize)
+			ready, watchCh := mp.WaitRange(pieceOffset, toRead)
+			if ready {
 				break
+			}
+			budget := pol.waitBudget
+			if !r.waitDeadline.IsZero() {
+				if d := time.Until(r.waitDeadline); d < budget {
+					budget = d
+				}
+			}
+			if budget <= 0 {
+				return totalRead, context.DeadlineExceeded
 			}
 			slog.Debug("Reader waiting for piece block range", "piece", pieceIdx, "offset", pieceOffset, "toRead", toRead)
 			select {
 			case <-watchCh:
-				slog.Debug("Reader woke up: watchCh closed/notified", "piece", pieceIdx)
 			case <-mp.Done():
-				slog.Debug("Reader woke up: mp.Done() closed", "piece", pieceIdx)
 			case <-r.closeCh:
-				slog.Warn("Reader closed by reader.Close()", "piece", pieceIdx)
 				return totalRead, errors.New("reader closed")
 			case <-r.ctx.Done():
-				slog.Warn("Reader request context cancelled", "piece", pieceIdx, "err", r.ctx.Err())
 				return totalRead, r.ctx.Err()
-			case <-time.After(15 * time.Second):
-				slog.Warn("Reader timeout waiting for piece block range", "piece", pieceIdx, "offset", pieceOffset, "toRead", toRead)
+			case <-time.After(budget):
+				slog.Warn("Reader timeout waiting for piece block range", "piece", pieceIdx, "offset", pieceOffset, "toRead", toRead, "class", int(r.class))
 				return totalRead, errors.New("timeout waiting for piece data")
 			}
 			r.mu.Lock()
@@ -241,11 +263,18 @@ func (r *Reader) GetActiveWindow() (int, int) {
 	absOffset := r.fileOffset + r.pos
 	currPiece := int(absOffset / r.cache.pieceLen)
 
+	// Protect from eviction the window this reader will actually consume next — its class's read-ahead
+	// span (byte-bounded per piece size so it can't outgrow the cache; min 2 so an in-flight read isn't
+	// evicted out from under us).
+	ahead := r.class.policy().aheadPiecesFor(r.cache.pieceLen)
+	if ahead < 2 {
+		ahead = 2
+	}
 	start := currPiece - 2
 	if start < 0 {
 		start = 0
 	}
-	end := currPiece + 30
+	end := currPiece + ahead
 	if end >= r.cache.pieceCount {
 		end = r.cache.pieceCount - 1
 	}

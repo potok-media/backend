@@ -41,9 +41,12 @@ func (m *Monitor) Start(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			m.mu.Lock()
+			// Gather client stats with NO lock held: client.Torrents()/t.Stats() call into the torrent
+			// client's own locks, and holding m.mu across them stalls every GetSpeed() (diagnostics /
+			// status handlers) for up to a tick. lastStats is owned solely by this goroutine.
 			currentTorrents := m.client.Torrents()
-			activeHashes := make(map[string]bool)
+			activeHashes := make(map[string]bool, len(currentTorrents))
+			newSpeeds := make(map[string]TorrentSpeed, len(currentTorrents))
 
 			for _, t := range currentTorrents {
 				h := t.InfoHash().HexString()
@@ -64,24 +67,18 @@ func (m *Monitor) Start(ctx context.Context) {
 						ulSpeed = 0
 					}
 				}
-
-				m.speeds[h] = TorrentSpeed{
-					DownloadSpeed: dlSpeed,
-					UploadSpeed:   ulSpeed,
-				}
-
-				lastStats[h] = statsSnapshot{
-					read:  currRead,
-					write: currWrite,
-				}
+				newSpeeds[h] = TorrentSpeed{DownloadSpeed: dlSpeed, UploadSpeed: ulSpeed}
+				lastStats[h] = statsSnapshot{read: currRead, write: currWrite}
 			}
-
-			for h := range m.speeds {
+			for h := range lastStats {
 				if !activeHashes[h] {
-					delete(m.speeds, h)
 					delete(lastStats, h)
 				}
 			}
+
+			// Publish under the lock — a bare map swap, no client calls held under m.mu.
+			m.mu.Lock()
+			m.speeds = newSpeeds
 			m.mu.Unlock()
 		}
 	}

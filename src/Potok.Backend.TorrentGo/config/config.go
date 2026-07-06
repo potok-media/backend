@@ -18,10 +18,10 @@ type Config struct {
 	HlsCacheBytes      int64
 	MemLimitBytes      int64
 	PreloadBytes       int64
-	ReadaheadPercent   int
 	ThumbCacheSize     int
 	ThumbCacheTTL      time.Duration
-	TorrentIdleTimeout time.Duration
+	TorrentIdleTimeout time.Duration // grace before a torrent with no active playback session is dropped
+	SessionTTL         time.Duration // a playback keepalive lapsed longer than this → the session expires
 	DisableAnalyzer    bool
 }
 
@@ -43,10 +43,10 @@ func LoadConfig() *Config {
 		HlsCacheBytes:      hlsCacheMB * 1024 * 1024,
 		MemLimitBytes:      memLimitMB * 1024 * 1024,
 		PreloadBytes:       preloadMB * 1024 * 1024,
-		ReadaheadPercent:   getEnvInt("POTOK_READAHEAD_PERCENT", 50),
 		ThumbCacheSize:     getEnvInt("POTOK_THUMB_CACHE_SIZE", 200),
 		ThumbCacheTTL:      getEnvDuration("POTOK_THUMB_CACHE_TTL", 5*time.Minute),
 		TorrentIdleTimeout: getEnvDuration("POTOK_TORRENT_IDLE_TIMEOUT", 60*time.Second),
+		SessionTTL:         getEnvDuration("POTOK_SESSION_TTL", 25*time.Second),
 		DisableAnalyzer:    getEnvBool("POTOK_DISABLE_ANALYZER", false),
 	}
 }

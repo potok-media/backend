@@ -130,7 +130,7 @@ func (h *mkvCueHandler) HandleInteger(id mkv.ElementID, v int64, _ mkv.ElementIn
 	return nil
 }
 
-func (h *mkvCueHandler) HandleString(mkv.ElementID, string, mkv.ElementInfo) error { return nil }
+func (h *mkvCueHandler) HandleString(mkv.ElementID, string, mkv.ElementInfo) error  { return nil }
 func (h *mkvCueHandler) HandleFloat(mkv.ElementID, float64, mkv.ElementInfo) error  { return nil }
 func (h *mkvCueHandler) HandleDate(mkv.ElementID, time.Time, mkv.ElementInfo) error { return nil }
 func (h *mkvCueHandler) HandleBinary(mkv.ElementID, []byte, mkv.ElementInfo) error  { return nil }

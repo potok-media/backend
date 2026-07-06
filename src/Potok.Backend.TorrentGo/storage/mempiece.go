@@ -9,14 +9,14 @@ import (
 
 var ErrPieceEvicted = errors.New("piece data evicted from cache")
 
-
 type MemPiece struct {
-	mu            sync.RWMutex
+	mu            sync.Mutex
 	size          int64
 	data          []byte
 	writtenBlocks []bool
 	complete      bool
 	accessed      time.Time
+	accounted     int64 // bytes this piece has added to Cache.filled (so release subtracts exactly that)
 	doneCh        chan struct{}
 	closeOnce     sync.Once
 	notifyCh      chan struct{}
@@ -33,12 +33,9 @@ func NewMemPiece(size int64) *MemPiece {
 	}
 }
 
-func (m *MemPiece) Release() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.data = nil
-	m.writtenBlocks = nil
-	m.complete = false
+// wake closes the current notify channel (waking every reader parked on it) and arms a fresh one.
+// Callers must hold m.mu.
+func (m *MemPiece) wake() {
 	if m.notifyCh != nil {
 		select {
 		case <-m.notifyCh:
@@ -50,18 +47,34 @@ func (m *MemPiece) Release() {
 	m.notifyCh = make(chan struct{})
 }
 
-func (m *MemPiece) ReadAt(p []byte, off int64) (n int, err error) {
+// Release drops the piece's buffer. Kept for the Close() path; ReleaseAndSize is the accounting form.
+func (m *MemPiece) Release() { m.ReleaseAndSize() }
+
+// ReleaseAndSize drops the buffer and returns exactly how many bytes this piece had contributed to
+// Cache.filled, so the cache can subtract that with no read-then-release race (len(data) is the full
+// piece size once allocated, and MarkNotComplete used to subtract nothing — both drifted `filled`).
+func (m *MemPiece) ReleaseAndSize() int64 {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	sz := m.accounted
+	m.accounted = 0
+	m.data = nil
+	m.writtenBlocks = nil
+	m.complete = false
+	m.wake()
+	return sz
+}
+
+func (m *MemPiece) ReadAt(p []byte, off int64) (n int, err error) {
+	// Single critical section: the old code checked data==nil under Lock, unlocked, then re-RLocked
+	// to copy — a Release() in that gap turned an evicted piece into a truncated read reported as a
+	// clean io.EOF (Reader.Read then returned short with a nil error).
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.data == nil {
-		m.mu.Unlock()
 		return 0, ErrPieceEvicted
 	}
 	m.accessed = time.Now()
-	m.mu.Unlock()
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	if off >= int64(len(m.data)) {
 		return 0, io.EOF
 	}
@@ -87,6 +100,7 @@ func (m *MemPiece) WriteAt(p []byte, off int64) (n int, err error) {
 	if n < len(p) {
 		err = io.ErrShortWrite
 	}
+	m.accounted += int64(n) // mirrors Cache.UpdateFilled(n) so release nets out to zero
 
 	startBlock := off / 16384
 	endBlock := (off + int64(n) - 1) / 16384
@@ -94,15 +108,7 @@ func (m *MemPiece) WriteAt(p []byte, off int64) (n int, err error) {
 		m.writtenBlocks[i] = true
 	}
 
-	if m.notifyCh != nil {
-		select {
-		case <-m.notifyCh:
-			// already closed
-		default:
-			close(m.notifyCh)
-		}
-	}
-	m.notifyCh = make(chan struct{})
+	m.wake()
 	return
 }
 
@@ -115,15 +121,7 @@ func (m *MemPiece) MarkComplete() {
 		}
 	}
 	m.accessed = time.Now()
-	if m.notifyCh != nil {
-		select {
-		case <-m.notifyCh:
-			// already closed
-		default:
-			close(m.notifyCh)
-		}
-	}
-	m.notifyCh = make(chan struct{})
+	m.wake()
 	m.mu.Unlock()
 
 	m.closeOnce.Do(func() {
@@ -132,15 +130,32 @@ func (m *MemPiece) MarkComplete() {
 }
 
 func (m *MemPiece) IsComplete() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.complete && m.data != nil
 }
 
 func (m *MemPiece) HasRange(off int64, length int64) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.hasRangeLocked(off, length)
+}
 
+// WaitRange atomically reports whether [off, off+length) is available now and, if not, returns the
+// notify channel that the NEXT write/complete/release will close — captured under the same lock as
+// the check, so a wakeup can never be lost between the check and parking on the channel (the R4
+// lost-wakeup). Reader.Read re-fetches the MemPiece each iteration, so an eviction+re-download that
+// swaps in a fresh piece can't strand a waiter on the released piece's orphaned channel either.
+func (m *MemPiece) WaitRange(off, length int64) (ready bool, ch <-chan struct{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.hasRangeLocked(off, length) {
+		return true, nil
+	}
+	return false, m.notifyCh
+}
+
+func (m *MemPiece) hasRangeLocked(off int64, length int64) bool {
 	if m.complete && m.data != nil {
 		return true
 	}
@@ -153,7 +168,6 @@ func (m *MemPiece) HasRange(off int64, length int64) bool {
 	if startBlock < 0 || endBlock >= int64(len(m.writtenBlocks)) {
 		return false
 	}
-
 	for i := startBlock; i <= endBlock; i++ {
 		if !m.writtenBlocks[i] {
 			return false
@@ -162,18 +176,12 @@ func (m *MemPiece) HasRange(off int64, length int64) bool {
 	return true
 }
 
-func (m *MemPiece) Watch() <-chan struct{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.notifyCh
-}
-
 func (m *MemPiece) Done() <-chan struct{} {
 	return m.doneCh
 }
 
 func (m *MemPiece) Accessed() time.Time {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.accessed
 }

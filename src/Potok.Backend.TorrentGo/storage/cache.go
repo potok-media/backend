@@ -23,9 +23,21 @@ type Cache struct {
 	pieceCount int
 	totalSize  int64
 	torrent    *torrent.Torrent
+	closed     bool // set by Close(); blocks post-teardown resurrection of a dropped torrent's cache
 }
 
 func NewCache(hash metainfo.Hash, capacity int64, pieceLen int64, pieceCount int) *Cache {
+	// The playback read-ahead window is eviction-protected; if it (plus the 2 trailing pieces) exceeds
+	// half the cache, the cache can end up permanently over-cap with nothing evictable → stalls. The
+	// byte-bounded read-ahead keeps this from happening, but warn loudly if a torrent's piece size is so
+	// large relative to the cache that even the byte budget can't fit comfortably.
+	if capacity > (1<<20) && pieceLen > 0 { // only real caches; skip tiny synthetic ones in unit tests
+		aheadN := ClassPlayback.policy().aheadPiecesFor(pieceLen)
+		if int64(aheadN+2)*pieceLen > capacity/2 {
+			slog.Warn("playback read-ahead window is large relative to the cache — expect eviction pressure",
+				"pieceLen", pieceLen, "aheadPieces", aheadN, "windowBytes", int64(aheadN+2)*pieceLen, "cacheBytes", capacity)
+		}
+	}
 	return &Cache{
 		hash:       hash,
 		pieces:     make(map[int]*MemPiece),
@@ -58,6 +70,7 @@ func (c *Cache) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.closed = true
 	for _, mp := range c.pieces {
 		mp.Release()
 	}
@@ -70,6 +83,11 @@ func (c *Cache) GetOrCreateMemPiece(idx int, size int64) *MemPiece {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.closed {
+		// Torrent is being torn down. Hand back a detached piece that is NEVER inserted into the map,
+		// so a late anacrolix WriteAt (after Close emptied the map) can't resurrect a dropped cache.
+		return NewMemPiece(size)
+	}
 	mp, ok := c.pieces[idx]
 	if !ok {
 		mp = NewMemPiece(size)
@@ -82,15 +100,20 @@ func (c *Cache) MarkNotComplete(idx int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.closed {
+		return
+	}
 	if mp, ok := c.pieces[idx]; ok {
-		mp.Release()
+		c.filled -= mp.ReleaseAndSize() // subtract exactly what this piece contributed (was leaked before)
 		delete(c.pieces, idx)
 	}
 }
 
 func (c *Cache) UpdateFilled(n int64) {
 	c.mu.Lock()
-	c.filled += n
+	if !c.closed {
+		c.filled += n
+	}
 	c.mu.Unlock()
 }
 
@@ -174,12 +197,10 @@ func (c *Cache) cleanPieces() {
 			break
 		}
 
-		cand.mp.mu.RLock()
-		size := int64(len(cand.mp.data))
-		cand.mp.mu.RUnlock()
-
+		// Release and subtract atomically (single piece-lock inside ReleaseAndSize) so `filled` can't
+		// drift against a concurrent write, and account exactly the bytes this piece contributed.
+		size := cand.mp.ReleaseAndSize()
 		c.filled -= size
-		cand.mp.Release()
 		delete(c.pieces, cand.index)
 
 		slog.Debug("Evicted piece", "index", cand.index, "size", size, "hash", c.hash.HexString())
@@ -215,38 +236,49 @@ func (c *Cache) UpdatePriorities(fileStartPiece, fileEndPiece int) {
 		closed := r.closed
 		pos := r.pos
 		fileOffset := r.fileOffset
+		class := r.class
 		r.mu.Unlock()
 
 		if closed {
 			continue
 		}
 
+		pol := class.policy()
 		absOffset := fileOffset + pos
 		currPiece := int(absOffset / pieceLen)
 
+		// Current piece at the class priority. The desired[] max-merge across readers keeps a piece a
+		// player wants Now at Now even if a lower-class reader also claims it — so a demux read-ahead
+		// can only ever RAISE an otherwise-idle piece, never lower a live player's.
 		if currPiece >= fileStartPiece && currPiece <= fileEndPiece {
-			desired[currPiece] = torrent.PiecePriorityNow
+			if desired[currPiece] < pol.curPrio {
+				desired[currPiece] = pol.curPrio
+			}
 		}
 
-		for idx := currPiece + 1; idx <= currPiece+30; idx++ {
+		// Bounded read-ahead at the class's read-ahead priority (0 pieces for a cold probe). Byte-bounded
+		// per piece size for playback so the window can't outgrow the RAM cache on large-piece torrents.
+		aheadN := pol.aheadPiecesFor(pieceLen)
+		for i := 1; i <= aheadN; i++ {
+			idx := currPiece + i
 			if idx >= fileStartPiece && idx <= fileEndPiece {
-				if desired[idx] < torrent.PiecePriorityHigh {
-					desired[idx] = torrent.PiecePriorityHigh
+				if desired[idx] < pol.aheadPrio {
+					desired[idx] = pol.aheadPrio
 				}
 			}
 		}
 
-		// Ensure first 2 pieces (headers) are prioritized
-		for idx := fileStartPiece; idx < fileStartPiece+2 && idx <= fileEndPiece; idx++ {
-			if desired[idx] < torrent.PiecePriorityHigh {
-				desired[idx] = torrent.PiecePriorityHigh
+		// Container index: boost the file's first/last 2 pieces for classes that seek to head/foot.
+		if pol.headFootBoost {
+			for idx := fileStartPiece; idx < fileStartPiece+2 && idx <= fileEndPiece; idx++ {
+				if desired[idx] < torrent.PiecePriorityHigh {
+					desired[idx] = torrent.PiecePriorityHigh
+				}
 			}
-		}
-
-		// Ensure last 2 pieces (footers/cues) are prioritized
-		for idx := fileEndPiece - 1; idx <= fileEndPiece && idx >= fileStartPiece; idx++ {
-			if desired[idx] < torrent.PiecePriorityHigh {
-				desired[idx] = torrent.PiecePriorityHigh
+			for idx := fileEndPiece - 1; idx <= fileEndPiece && idx >= fileStartPiece; idx++ {
+				if desired[idx] < torrent.PiecePriorityHigh {
+					desired[idx] = torrent.PiecePriorityHigh
+				}
 			}
 		}
 	}
@@ -259,6 +291,39 @@ func (c *Cache) UpdatePriorities(fileStartPiece, fileEndPiece int) {
 		}
 		t.Piece(idx).SetPriority(prio)
 	}
+}
+
+// HasByteRange reports whether every piece covering the file byte range [start, start+length) is
+// complete and resident RIGHT NOW — no download, no wait. Used to gate on-demand demux (subtitle
+// windows): if the window's bytes aren't already cached, the caller returns a fast retry instead of
+// starting ffmpeg into a cold region whose loopback read would stall.
+func (c *Cache) HasByteRange(fileOffset, start, length int64) bool {
+	if length <= 0 {
+		return true
+	}
+	c.mu.RLock()
+	pieceLen := c.pieceLen
+	pieceCount := c.pieceCount
+	closed := c.closed
+	c.mu.RUnlock()
+	if closed || pieceLen <= 0 {
+		return false
+	}
+
+	startPiece := int((fileOffset + start) / pieceLen)
+	endPiece := int((fileOffset + start + length - 1) / pieceLen)
+	if startPiece < 0 {
+		startPiece = 0
+	}
+	for idx := startPiece; idx <= endPiece && idx < pieceCount; idx++ {
+		c.mu.RLock()
+		mp, ok := c.pieces[idx]
+		c.mu.RUnlock()
+		if !ok || !mp.IsComplete() {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Cache) PieceLen() int64 {
@@ -291,7 +356,7 @@ func (c *Cache) WaitForPieces(indices []int, totalLength int64, timeout time.Dur
 		}
 
 		mp := c.GetOrCreateMemPiece(idx, size)
-		
+
 		timeRemaining := time.Until(deadline)
 		if timeRemaining <= 0 {
 			return context.DeadlineExceeded

@@ -10,7 +10,7 @@ import (
 
 func TestMemPieceReadWriteComplete(t *testing.T) {
 	mp := NewMemPiece(10)
-	
+
 	// Test basic write
 	data := []byte("hello")
 	n, err := mp.WriteAt(data, 0)
@@ -34,7 +34,7 @@ func TestMemPieceReadWriteComplete(t *testing.T) {
 	// Test accessed time updating
 	initialAccess := mp.Accessed()
 	time.Sleep(10 * time.Millisecond)
-	
+
 	_, _ = mp.ReadAt(buf, 0)
 	if !mp.Accessed().After(initialAccess) {
 		t.Errorf("Accessed time did not update after read")
@@ -70,7 +70,7 @@ func TestCacheEviction(t *testing.T) {
 	cfg := &config.Config{
 		CacheSizeBytes: 30, // Max 30 bytes (3 pieces of size 10)
 	}
-	
+
 	hash := metainfo.NewHashFromHex("0123456789abcdef0123456789abcdef01234567")
 	cache := NewCache(hash, cfg.CacheSizeBytes, 10, 5)
 
@@ -137,9 +137,13 @@ func TestCacheEvictionWithReaderProtection(t *testing.T) {
 	cfg := &config.Config{
 		CacheSizeBytes: 20, // Capacity 20 bytes (2 pieces)
 	}
-	
+
 	hash := metainfo.NewHashFromHex("0123456789abcdef0123456789abcdef01234567")
-	cache := NewCache(hash, cfg.CacheSizeBytes, 10, 50)
+	// pieceLen must be realistic: the playback read-ahead window is byte-bounded (~64MB), so a 2MB piece
+	// gives a ~32-piece protected window (0..32) — piece 40 is outside it and stays evictable. (The old
+	// 10-byte pieceLen made 64MB/10 protect the whole cache.) Byte accounting below still uses 10-byte
+	// writes; only the reader's window math reads pieceLen.
+	cache := NewCache(hash, cfg.CacheSizeBytes, 2<<20, 50)
 
 	mp0 := cache.GetOrCreateMemPiece(0, 10)
 	mp40 := cache.GetOrCreateMemPiece(40, 10)
@@ -162,7 +166,7 @@ func TestCacheEvictionWithReaderProtection(t *testing.T) {
 		cache:      cache,
 		fileOffset: 0,
 		fileSize:   500,
-		pos:        0, // will protect piece 0 (window 0 to 30)
+		pos:        0, // will protect piece 0 (byte-bounded window 0 to 32 at 2MB pieces)
 	}
 	cache.RegisterReader(r)
 
@@ -202,4 +206,3 @@ func TestUpdatePriorities(t *testing.T) {
 	// UpdatePriorities with c.torrent == nil should return immediately without panicking
 	cache.UpdatePriorities(0, 49)
 }
-

@@ -9,7 +9,7 @@ import (
 
 func (c *Cache) Preload(t *torrent.Torrent, file *torrent.File, size int64) error {
 	totalLength := t.Length()
-	
+
 	fileStartOffset := file.Offset()
 	preloadEndOffset := fileStartOffset + size
 	if preloadEndOffset > fileStartOffset+file.Length() {
@@ -22,10 +22,10 @@ func (c *Cache) Preload(t *torrent.Torrent, file *torrent.File, size int64) erro
 	fileEndOffset := fileStartOffset + file.Length()
 	lastPiece := int((fileEndOffset - 1) / c.pieceLen)
 
-	slog.Info("Starting preload", 
-		"file", file.Path(), 
-		"startPiece", startPiece, 
-		"endPiece", endPiece, 
+	slog.Info("Starting preload",
+		"file", file.Path(),
+		"startPiece", startPiece,
+		"endPiece", endPiece,
 		"lastPiece", lastPiece,
 		"preloadSizeMB", float64(size)/(1024*1024),
 	)
@@ -41,7 +41,7 @@ func (c *Cache) Preload(t *torrent.Torrent, file *torrent.File, size int64) erro
 		t.Piece(lastPiece).SetPriority(torrent.PiecePriorityNow)
 		lastPieces = append(lastPieces, lastPiece)
 		if lastPiece-1 >= startPiece {
-			t.Piece(lastPiece-1).SetPriority(torrent.PiecePriorityNow)
+			t.Piece(lastPiece - 1).SetPriority(torrent.PiecePriorityNow)
 			lastPieces = append(lastPieces, lastPiece-1)
 		}
 	}
@@ -50,7 +50,7 @@ func (c *Cache) Preload(t *torrent.Torrent, file *torrent.File, size int64) erro
 	for i := startPiece; i <= endPiece && i < c.pieceCount; i++ {
 		pSize := c.getPieceSize(i, totalLength)
 		mp := c.GetOrCreateMemPiece(i, pSize)
-		
+
 		select {
 		case <-mp.Done():
 			// piece downloaded
@@ -63,7 +63,7 @@ func (c *Cache) Preload(t *torrent.Torrent, file *torrent.File, size int64) erro
 	for _, lp := range lastPieces {
 		pSize := c.getPieceSize(lp, totalLength)
 		mp := c.GetOrCreateMemPiece(lp, pSize)
-		
+
 		select {
 		case <-mp.Done():
 			// piece downloaded
@@ -71,7 +71,7 @@ func (c *Cache) Preload(t *torrent.Torrent, file *torrent.File, size int64) erro
 			slog.Warn("Preload timeout waiting for last piece", "piece", lp)
 		}
 	}
-	
+
 	slog.Info("Preload finished", "file", file.Path())
 	return nil
 }
