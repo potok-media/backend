@@ -61,7 +61,7 @@ RUN go build -ldflags="-w -s" -o potok-torrent-go .
 FROM debian:bookworm-slim
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates tzdata libchromaprint-tools libx264-164 libva2 libva-drm2; \
+    apt-get install -y --no-install-recommends ca-certificates tzdata libchromaprint-tools libx264-164 libva2 libva-drm2 intel-media-va-driver mesa-va-drivers; \
     rm -rf /var/lib/apt/lists/*
 # libx264-164: our /opt/ffmpeg libavcodec.so links libx264 at runtime (--enable-libx264). It's a Debian system
 # lib, not part of the copied /opt/ffmpeg, so the runtime needs it or the in-process media/ engine can't load.
