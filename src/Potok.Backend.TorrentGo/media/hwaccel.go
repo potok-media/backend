@@ -37,7 +37,7 @@ func InitGPU() {
 	} else {
 		candidates = []candidate{
 			{name: "nvenc", hwTypeName: "cuda", encoderName: "h264_nvenc"},
-			{name: "vaapi", hwTypeName: "vaapi", encoderName: "h264_vaapi"},
+			{name: "vaapi", hwTypeName: "vaapi", encoderName: "libx264"},
 		}
 	}
 
