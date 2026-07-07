@@ -36,7 +36,10 @@ RUN set -eux; \
 ########## Stage 2 — Go build (cgo, linked against the ffmpeg shared libs above) ##########
 FROM golang:1.23-bookworm AS builder
 ARG FFMPEG_PREFIX
-RUN apt-get update && apt-get install -y --no-install-recommends pkg-config && rm -rf /var/lib/apt/lists/*
+# libx264-dev: our ffmpeg was built with --enable-libx264, so libavcodec.so has a DT_NEEDED on libx264.so.164.
+# libx264 is a Debian system lib (NOT under /opt/ffmpeg), so `COPY --from=ffmpeg ${FFMPEG_PREFIX}` doesn't carry
+# it — without this the cgo link fails with `undefined reference to x264_*`. Same bookworm base ⇒ same soname 164.
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libx264-dev && rm -rf /var/lib/apt/lists/*
 COPY --from=ffmpeg ${FFMPEG_PREFIX} ${FFMPEG_PREFIX}
 ENV CGO_ENABLED=1 \
     CGO_CFLAGS="-I${FFMPEG_PREFIX}/include" \
@@ -55,8 +58,10 @@ RUN go build -ldflags="-w -s" -o potok-torrent-go .
 FROM debian:bookworm-slim
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates tzdata libchromaprint-tools; \
+    apt-get install -y --no-install-recommends ca-certificates tzdata libchromaprint-tools libx264-164; \
     rm -rf /var/lib/apt/lists/*
+# libx264-164: our /opt/ffmpeg libavcodec.so links libx264 at runtime (--enable-libx264). It's a Debian system
+# lib, not part of the copied /opt/ffmpeg, so the runtime needs it or the in-process media/ engine can't load.
 # Our ffmpeg n7.0 shared libs (built above) — what the in-process media/ (go-astiav) binary links at
 # runtime. There is NO ffmpeg/ffprobe CLI anymore: HLS segmentation, probing, thumbnails, subtitles and
 # the intro fingerprint's audio decode are all in-process libav over the torrent cache. The only external
