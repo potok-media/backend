@@ -17,6 +17,7 @@ import (
 type audioEncoder struct {
 	ofc    *astiav.FormatContext
 	outIdx int
+	w      *fragWriter // shared one-packet-delay writer: stamps exact per-packet durations (gapless segments)
 
 	dec  *astiav.CodecContext
 	enc  *astiav.CodecContext
@@ -41,7 +42,7 @@ type audioEncoder struct {
 
 // newAudioEncoder wires the decode→resample→AAC-encode pipeline for input stream srcIdx and adds the AAC
 // output stream to ofc (before WriteHeader). Caller must free() it.
-func newAudioEncoder(ifc, ofc *astiav.FormatContext, srcIdx int, startTS, endTS int64) (*audioEncoder, error) {
+func newAudioEncoder(ifc, ofc *astiav.FormatContext, srcIdx int, startTS, endTS int64, fw *fragWriter) (*audioEncoder, error) {
 	in := ifc.Streams()[srcIdx]
 
 	decCodec := astiav.FindDecoder(in.CodecParameters().CodecID())
@@ -107,6 +108,7 @@ func newAudioEncoder(ifc, ofc *astiav.FormatContext, srcIdx int, startTS, endTS 
 	a := &audioEncoder{
 		ofc:        ofc,
 		outIdx:     out.Index(),
+		w:          fw,
 		dec:        dec,
 		enc:        enc,
 		swr:        astiav.AllocSoftwareResampleContext(),
@@ -231,9 +233,9 @@ func (a *audioEncoder) encode(f *astiav.Frame) error {
 		}
 		a.pkt.SetStreamIndex(a.outIdx)
 		a.pkt.RescaleTs(a.enc.TimeBase(), a.ofc.Streams()[a.outIdx].TimeBase())
-		if err := a.ofc.WriteInterleavedFrame(a.pkt); err != nil {
+		if err := a.w.write(a.pkt); err != nil {
 			a.pkt.Unref()
-			return fmt.Errorf("media: audio write frame: %w", err)
+			return err
 		}
 		a.pkt.Unref()
 	}

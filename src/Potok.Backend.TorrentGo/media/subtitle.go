@@ -62,7 +62,7 @@ func SubtitleWindow(ctx context.Context, src io.ReadSeeker, subRel int, startSec
 	if startSec > 0 {
 		seekIdx, seekTB := subIdx, stb
 		for _, s := range streams {
-			if s.CodecParameters().MediaType() == astiav.MediaTypeVideo {
+			if s.CodecParameters().MediaType() == astiav.MediaTypeVideo && !s.DispositionFlags().Has(astiav.DispositionFlagAttachedPic) {
 				seekIdx, seekTB = s.Index(), s.TimeBase()
 				break
 			}

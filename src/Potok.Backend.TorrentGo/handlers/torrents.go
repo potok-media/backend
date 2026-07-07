@@ -37,9 +37,13 @@ type HandlerContext struct {
 	metadataCache   sync.Map // map[string][]byte
 	headersCache    sync.Map // map[string]*FileHeaders
 	metadataSFG     singleflight.Group
-	hlsSegList      sync.Map // map[string]*segList — cached VOD segmentation per file
-	hlsStreamLayout sync.Map // map[string]*streamLayout — cached source stream indices (video + audios) per file
-	hlsSegCache     segCache // LRU of produced segment bytes — serving source, decoupled from sessions
+	hlsSegList      sync.Map           // map[string]*segList — cached VOD segmentation per file
+	hlsSegSFG       singleflight.Group // coalesce concurrent cold segList builds — the video + audio index.m3u8 requests build the SAME list, so only one runs the 40s+25s cold probe/Cues wait
+	hlsStreamLayout sync.Map           // map[string]*streamLayout — cached source stream indices (video + audios) per file
+	hlsLayoutSFG    singleflight.Group // coalesce concurrent cold stream-layout probes (every produce path + both playlists probe the same layout)
+	audioCont       sync.Map           // map[hash_file_rel]*media.ContinuousAAC — continuous AAC transcode per NON-AAC audio track (copy-sliced into segments)
+	audioContSFG    singleflight.Group // coalesce concurrent starts of the same track's continuous transcoder
+	hlsSegCache     segCache           // LRU of produced segment bytes — serving source, decoupled from sessions
 	// One lock over the torrent lifecycle: playback sessions + the drop grace clock. Single owner of that
 	// state (anacrolix/Jellyfin shape), so the old Delete-outside-lock / LoadOrStore-before-lock races
 	// can't recur. Rule: hold it only to read/mutate these maps; do the blocking torrent Drop OUTSIDE it.
@@ -329,6 +333,7 @@ func (h *HandlerContext) dropTorrent(infoHash metainfo.Hash, hashHex string) {
 	}
 	h.timecodeCache.Delete(hashHex)
 	h.hlsSegCache.purgePrefix(prefix)
+	h.dropAudioCont(prefix) // stop + free continuous-AAC transcoders (goroutine + ~100MB/track)
 
 	// Close (sets closed=true → no resurrection) then Drop; both can block on the torrent client's own
 	// goroutines, so run them detached — the lifecycle state is already consistent. Clear `dropping`

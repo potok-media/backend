@@ -42,7 +42,13 @@ func (h *HandlerContext) HandleGetMediaMetadata(w http.ResponseWriter, r *http.R
 	// probe-free. No producer to start: media/ makes segments on demand.
 	go func() {
 		_, _ = h.getSegList(context.Background(), hashHex, fileIndexStr)
-		_, _ = h.getStreamLayout(context.Background(), hashHex, fileIndexStr)
+		layout, lerr := h.getStreamLayout(context.Background(), hashHex, fileIndexStr)
+		// Pre-warm the continuous AAC transcode for the DEFAULT (first) audio track if it needs transcoding, so
+		// its frames are already filling by the time hls.js requests audio seg 0. Other tracks start lazily on
+		// first request; AAC-source tracks need no transcoder (plain copy path).
+		if lerr == nil && len(layout.audioCodecs) > 0 && layout.audioCodecs[0] != "aac" {
+			_, _ = h.getAudioCont(context.Background(), hashHex, fileIndexStr, 0)
+		}
 	}()
 
 	cacheKey := fmt.Sprintf("%s_%s", hashHex, fileIndexStr)

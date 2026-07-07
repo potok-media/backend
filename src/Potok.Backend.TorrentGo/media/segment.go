@@ -19,6 +19,7 @@ const noPTS = math.MinInt64
 //   - frag_keyframe    → fragment at keyframes;
 //   - default_base_moof→ each moof self-describes its base offset, so a media segment is independently
 //     appendable after the init and its tfdt (kept absolute below) lets hls.js order segments (Review R6).
+//
 // initMovFlags configures the muxer for the INIT segment: empty_moov writes the full moov (codec config,
 // no samples) at header time — the init IS the header.
 const initMovFlags = "+empty_moov+frag_keyframe+default_base_moof"
@@ -33,6 +34,7 @@ const initMovFlags = "+empty_moov+frag_keyframe+default_base_moof"
 //     header time and the anchor is locked to 0 before any packet arrives);
 //   - frag_discont → movenc anchors the first fragment's tfdt at that incoming absolute dts instead of
 //     rebasing to 0.
+//
 // The segment's own ftyp+moov prefix is stripped after WriteTrailer (the client uses the shared init).
 const segMovFlags = "+delay_moov+frag_discont+frag_keyframe+default_base_moof"
 
@@ -63,7 +65,8 @@ func InitSegment(ctx context.Context, src io.ReadSeeker, streams []int, transcod
 	// crucially the H.264/AAC output streams for transcoded video/audio, not the source HEVC/AC3. No
 	// packets are processed; opening the encoders is enough to emit their codec config into the moov (the
 	// window bounds are irrelevant here since no frames are encoded).
-	_, videoEncs, audioEncs, err := buildOutputPlan(ifc, ofc, streams, 0, math.MaxInt64, transcodeVideo)
+	// No packets flow here, so the fragWriter is never written to — but the encoder constructors require one.
+	_, videoEncs, audioEncs, err := buildOutputPlan(ifc, ofc, streams, 0, math.MaxInt64, transcodeVideo, newFragWriter(ofc))
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +125,9 @@ func Segment(ctx context.Context, src io.ReadSeeker, startSec, durSec float64, s
 	startTS := toTicks(startSec)
 	endTS := toTicks(startSec + durSec)
 
-	copyMap, videoEncs, audioEncs, err := buildOutputPlan(ifc, ofc, streams, startTS, endTS, transcodeVideo)
+	fw := newFragWriter(ofc)
+	defer fw.free()
+	copyMap, videoEncs, audioEncs, err := buildOutputPlan(ifc, ofc, streams, startTS, endTS, transcodeVideo, fw)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +158,8 @@ func Segment(ctx context.Context, src io.ReadSeeker, startSec, durSec float64, s
 	seekIdx, seekTB := primary, ptb
 	if inStreams[primary].CodecParameters().MediaType() != astiav.MediaTypeVideo {
 		for _, s := range inStreams {
-			if s.CodecParameters().MediaType() == astiav.MediaTypeVideo {
+			// Skip cover-art stills (ATTACHED_PIC): a 1-frame image carries no usable container index to seek on.
+			if s.CodecParameters().MediaType() == astiav.MediaTypeVideo && !s.DispositionFlags().Has(astiav.DispositionFlagAttachedPic) {
 				seekIdx, seekTB = s.Index(), s.TimeBase()
 				break
 			}
@@ -221,14 +227,15 @@ func Segment(ctx context.Context, src io.ReadSeeker, startSec, durSec float64, s
 		pkt.SetStreamIndex(outIdx)
 		pkt.RescaleTs(inStreams[si].TimeBase(), ofc.Streams()[outIdx].TimeBase())
 		sanitizeCopyDTS(pkt, outIdx, lastDTS)
-		if err := ofc.WriteInterleavedFrame(pkt); err != nil {
+		if err := fw.write(pkt); err != nil {
 			pkt.Unref()
-			return nil, fmt.Errorf("media: write frame: %w", err)
+			return nil, err
 		}
 		pkt.Unref()
 	}
 
-	// Flush every transcoder (drain decoder/FIFO + encoder) before finalizing the fragment.
+	// Flush every transcoder (drain decoder/FIFO + encoder) before finalizing the fragment. The encoders write
+	// through the same fragWriter, so their trailing packets are held too.
 	for _, v := range videoEncs {
 		if err := v.flush(); err != nil {
 			return nil, err
@@ -238,6 +245,11 @@ func Segment(ctx context.Context, src io.ReadSeeker, startSec, durSec float64, s
 		if err := a.flush(); err != nil {
 			return nil, err
 		}
+	}
+	// Flush every stream's last held packet with an exact duration — otherwise movenc ESTIMATES the last
+	// sample's duration and the segment ends slightly off its grid boundary (the recurring HLS4 stall).
+	if err := fw.finish(); err != nil {
+		return nil, err
 	}
 	if err := ofc.WriteTrailer(); err != nil {
 		return nil, fmt.Errorf("media: write trailer: %w", err)
@@ -272,6 +284,80 @@ func sanitizeCopyDTS(pkt *astiav.Packet, outIdx int, last map[int]int64) {
 	pkt.SetDts(dts)
 	if p := pkt.Pts(); p == noPTS || p < dts {
 		pkt.SetPts(dts)
+	}
+}
+
+// fragWriter delays each output stream's packets by ONE so it can stamp an explicit duration on every one.
+// movenc derives a sample's duration from dts[i+1]-dts[i] for all samples EXCEPT the last of each fragment,
+// which it ESTIMATES ("Estimating the duration of the last packet in a fragment") — and that estimate is
+// inexact and DIFFERS between the independently-produced audio and video renditions, so their segment ends
+// drift apart on the shared HLS timeline and hls.js stalls (bufferStalledError). Holding the previous packet
+// lets us set its duration to the real dts gap; the final held packet gets the last such gap (the stream's
+// natural frame period / audio frame size). We deliberately do NOT stretch the last packet to the grid
+// boundary — audio frames are quantized (1024 samples) and wouldn't land on the video keyframe boundary, so
+// stretching would open an audio gap. Natural durations make consecutive segments of EACH rendition abut
+// exactly (seg[N].end == seg[N+1].start), which is what removes the drift.
+type fragWriter struct {
+	ofc     *astiav.FormatContext
+	held    map[int]*astiav.Packet // per output stream: the packet awaiting its successor's dts
+	lastDur map[int]int64          // per output stream: the last interior duration, reused for the final packet
+}
+
+func newFragWriter(ofc *astiav.FormatContext) *fragWriter {
+	return &fragWriter{ofc: ofc, held: map[int]*astiav.Packet{}, lastDur: map[int]int64{}}
+}
+
+// write buffers pkt (holding a clone) and flushes the previously-held packet for its stream first, stamping it
+// with the exact dts gap. The caller keeps ownership of pkt and may Unref it afterwards.
+func (fw *fragWriter) write(pkt *astiav.Packet) error {
+	si := pkt.StreamIndex()
+	if prev := fw.held[si]; prev != nil {
+		if d := pkt.Dts() - prev.Dts(); d > 0 {
+			prev.SetDuration(d)
+			fw.lastDur[si] = d
+		}
+		werr := fw.ofc.WriteInterleavedFrame(prev) // consumes prev's data ref
+		prev.Free()
+		if werr != nil {
+			delete(fw.held, si)
+			return fmt.Errorf("media: write frame: %w", werr)
+		}
+	}
+	clone := pkt.Clone()
+	if clone == nil {
+		return errors.New("media: fragWriter: packet clone failed")
+	}
+	fw.held[si] = clone
+	return nil
+}
+
+// finish flushes each stream's final held packet, stamping it with the last known interior duration so the
+// segment's last sample carries a real duration (no movenc estimate). Call once before WriteTrailer.
+func (fw *fragWriter) finish() error {
+	for si, prev := range fw.held {
+		dur := fw.lastDur[si]
+		if dur <= 0 {
+			dur = prev.Duration()
+		}
+		if dur <= 0 {
+			dur = 1
+		}
+		prev.SetDuration(dur)
+		werr := fw.ofc.WriteInterleavedFrame(prev)
+		prev.Free()
+		delete(fw.held, si)
+		if werr != nil {
+			return fmt.Errorf("media: write frame: %w", werr)
+		}
+	}
+	return nil
+}
+
+// free releases any still-held packets (error paths); safe to defer.
+func (fw *fragWriter) free() {
+	for si, p := range fw.held {
+		p.Free()
+		delete(fw.held, si)
 	}
 }
 

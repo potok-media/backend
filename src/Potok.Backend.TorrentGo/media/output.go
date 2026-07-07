@@ -93,7 +93,7 @@ func openOutput(mw *memWriter) (*astiav.FormatContext, func(), error) {
 // Returns copyMap (src→out idx for copied streams), videoEncs and audioEncs (src→transcoder). The caller
 // WriteHeader()s after, dispatches each packet to the matching encoder/copy, flushes every encoder, and
 // must free() them all.
-func buildOutputPlan(ifc, ofc *astiav.FormatContext, streams []int, startTS, endTS int64, transcodeVideo bool) (map[int]int, map[int]*videoEncoder, map[int]*audioEncoder, error) {
+func buildOutputPlan(ifc, ofc *astiav.FormatContext, streams []int, startTS, endTS int64, transcodeVideo bool, fw *fragWriter) (map[int]int, map[int]*videoEncoder, map[int]*audioEncoder, error) {
 	inStreams := ifc.Streams()
 	copyMap := make(map[int]int)
 	videoEncs := make(map[int]*videoEncoder)
@@ -116,14 +116,14 @@ func buildOutputPlan(ifc, ofc *astiav.FormatContext, streams []int, startTS, end
 		cid := in.CodecParameters().CodecID()
 		switch {
 		case mt == astiav.MediaTypeVideo && (transcodeVideo || cid != astiav.CodecIDH264):
-			enc, err := newVideoEncoder(ifc, ofc, si, startTS, endTS)
+			enc, err := newVideoEncoder(ifc, ofc, si, startTS, endTS, fw)
 			if err != nil {
 				freeAll()
 				return nil, nil, nil, err
 			}
 			videoEncs[si] = enc
 		case mt == astiav.MediaTypeAudio && cid != astiav.CodecIDAac:
-			enc, err := newAudioEncoder(ifc, ofc, si, startTS, endTS)
+			enc, err := newAudioEncoder(ifc, ofc, si, startTS, endTS, fw)
 			if err != nil {
 				freeAll()
 				return nil, nil, nil, err

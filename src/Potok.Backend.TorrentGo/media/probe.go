@@ -12,12 +12,13 @@ const avTimeBase = 1_000_000
 
 // Track is a demuxed stream summary — the shape the plugin/player descriptor needs.
 type Track struct {
-	Index    int     `json:"index"`
-	Kind     string  `json:"kind"`     // "video" | "audio" | "subtitle" | "attachment" | "data" | "unknown"
-	Codec    string  `json:"codec"`    // libav codec name, e.g. "h264", "hevc", "aac", "ac3", "ass", "subrip"
-	Language string  `json:"language"` // stream metadata "language" tag (e.g. "eng", "rus"), "" if absent
-	Title    string  `json:"title"`    // stream metadata "title" tag, "" if absent
-	StartSec float64 `json:"startSec"` // stream start time (source PTS offset) in seconds; 0 if unset
+	Index       int     `json:"index"`
+	Kind        string  `json:"kind"`        // "video" | "audio" | "subtitle" | "attachment" | "data" | "unknown"
+	Codec       string  `json:"codec"`       // libav codec name, e.g. "h264", "hevc", "aac", "ac3", "ass", "subrip"
+	Language    string  `json:"language"`    // stream metadata "language" tag (e.g. "eng", "rus"), "" if absent
+	Title       string  `json:"title"`       // stream metadata "title" tag, "" if absent
+	StartSec    float64 `json:"startSec"`    // stream start time (source PTS offset) in seconds; 0 if unset
+	AttachedPic bool    `json:"attachedPic"` // a cover-art/thumbnail still (MediaType video, disposition ATTACHED_PIC) — NOT the real video stream, must never be selected for playback
 }
 
 // ProbeResult replaces the ffprobe JSON that metadata.go used to shell out for.
@@ -47,12 +48,13 @@ func ProbeTracks(ctx context.Context, src io.ReadSeeker) (*ProbeResult, error) {
 		}
 		lang, title := streamTag(s, "language"), streamTag(s, "title")
 		res.Tracks = append(res.Tracks, Track{
-			Index:    s.Index(),
-			Kind:     mediaKind(cp.MediaType()),
-			Codec:    cp.CodecID().String(),
-			Language: lang,
-			Title:    title,
-			StartSec: startSec,
+			Index:       s.Index(),
+			Kind:        mediaKind(cp.MediaType()),
+			Codec:       cp.CodecID().String(),
+			Language:    lang,
+			Title:       title,
+			StartSec:    startSec,
+			AttachedPic: s.DispositionFlags().Has(astiav.DispositionFlagAttachedPic),
 		})
 	}
 	return res, nil

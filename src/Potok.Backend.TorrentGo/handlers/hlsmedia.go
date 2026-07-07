@@ -39,13 +39,34 @@ const (
 )
 
 // getStreamLayout probes (once, cached) which source streams a file has, so a rendition request can map a
-// relIndex to a real source stream index. Patient on a cold torrent (retries until the front warms).
+// relIndex to a real source stream index. Patient on a cold torrent (retries until the front warms). Every
+// produce path (video/audio init + segment) and both playlist builds probe the SAME layout and arrive
+// together on a cold open, so the up-to-40s probe is coalesced through singleflight — one probe, shared —
+// with a detached, self-bounded ctx so one caller leaving can't cancel it for the rest.
 func (h *HandlerContext) getStreamLayout(ctx context.Context, hashHex, fileIndexStr string) (*streamLayout, error) {
 	key := hashHex + "_" + fileIndexStr
 	if v, ok := h.hlsStreamLayout.Load(key); ok {
 		return v.(*streamLayout), nil
 	}
+	v, err, _ := h.hlsLayoutSFG.Do(key, func() (interface{}, error) {
+		if v, ok := h.hlsStreamLayout.Load(key); ok {
+			return v.(*streamLayout), nil
+		}
+		// Detached from the caller (shared run), but hard-bounded so a probe that blocks on a cold read can
+		// never hang the singleflight leader — the retry loop already stops at layoutProbeDeadline; the +5s
+		// slack lets an in-flight ProbeTracks unwind via the IOInterrupter.
+		pctx, cancel := context.WithTimeout(context.Background(), layoutProbeDeadline+5*time.Second)
+		defer cancel()
+		return h.probeStreamLayout(pctx, key, hashHex, fileIndexStr)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*streamLayout), nil
+}
 
+// probeStreamLayout runs the actual cold-patient probe loop for getStreamLayout and caches the result.
+func (h *HandlerContext) probeStreamLayout(ctx context.Context, key, hashHex, fileIndexStr string) (*streamLayout, error) {
 	deadline := time.Now().Add(layoutProbeDeadline)
 	for {
 		rs, _, err := h.openTorrentFileReader(ctx, hashHex, fileIndexStr, storage.ClassColdProbe)
@@ -57,6 +78,12 @@ func (h *HandlerContext) getStreamLayout(ctx context.Context, hashHex, fileIndex
 				for _, t := range probe.Tracks {
 					switch t.Kind {
 					case "video":
+						// Skip cover-art/thumbnail stills (disposition ATTACHED_PIC): they are MediaType video
+						// but a single static image, so picking one as THE video stream transcodes garbage
+						// (non-monotonic PTS → muxer 500). Pick the first REAL video stream instead.
+						if t.AttachedPic {
+							continue
+						}
 						if layout.video < 0 {
 							layout.video = t.Index
 							layout.videoCodec = t.Codec
@@ -130,12 +157,21 @@ func (h *HandlerContext) produceAudioInit(ctx context.Context, hashHex, fileInde
 	if rel < 0 || rel >= len(layout.audios) {
 		return nil, fmt.Errorf("audio track %d out of range", rel)
 	}
+	// Non-AAC: the init comes from the continuous-AAC transcoder's frozen codec config, not a per-segment
+	// encoder — so init + every segment describe the identical AAC stream (see continuous-AAC plan).
+	if layout.audioCodecs[rel] != "aac" {
+		cont, cerr := h.getAudioCont(ctx, hashHex, fileIndexStr, rel)
+		if cerr != nil {
+			return nil, cerr
+		}
+		return h.produceAudioInitCont(ctx, cont)
+	}
 	rs, _, err := h.openTorrentFileReader(ctx, hashHex, fileIndexStr, storage.ClassPlayback)
 	if err != nil {
 		return nil, err
 	}
 	defer rs.Close()
-	// Audio decides copy (AAC) vs transcode (→AAC) per codec internally; transcodeVideo is irrelevant here.
+	// AAC source: plain copy remux.
 	return media.InitSegment(ctx, rs, []int{layout.audios[rel]}, false)
 }
 
@@ -146,6 +182,16 @@ func (h *HandlerContext) produceAudioSegment(ctx context.Context, hashHex, fileI
 	}
 	if rel < 0 || rel >= len(layout.audios) {
 		return nil, fmt.Errorf("audio track %d out of range", rel)
+	}
+	// Non-AAC (AC3/EAC3/DTS/…): copy-slice the continuous AAC transcode so consecutive segments abut exactly.
+	// Per-segment re-encoding (the else branch's transcode) gives each segment its own AAC frame phase → overlap
+	// → hls.js bufferAppendError. AAC source tiles fine as a plain copy.
+	if layout.audioCodecs[rel] != "aac" {
+		cont, cerr := h.getAudioCont(ctx, hashHex, fileIndexStr, rel)
+		if cerr != nil {
+			return nil, cerr
+		}
+		return h.produceAudioSegmentCont(ctx, cont, sl, n)
 	}
 	return h.produceSegmentRetry(ctx, hashHex, fileIndexStr, []int{layout.audios[rel]}, sl, n, false)
 }

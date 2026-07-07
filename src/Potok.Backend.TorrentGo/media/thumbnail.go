@@ -22,7 +22,9 @@ func Thumbnail(ctx context.Context, src io.ReadSeeker, timeSec float64, width, h
 
 	var vstream *astiav.Stream
 	for _, s := range fc.Streams() {
-		if s.CodecParameters().MediaType() == astiav.MediaTypeVideo {
+		// Skip cover-art stills (ATTACHED_PIC): thumbnailing a 1-frame image would return the cover, not a
+		// frame at the requested time.
+		if s.CodecParameters().MediaType() == astiav.MediaTypeVideo && !s.DispositionFlags().Has(astiav.DispositionFlagAttachedPic) {
 			vstream = s
 			break
 		}

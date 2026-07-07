@@ -65,12 +65,27 @@ func (h *HandlerContext) getSegList(ctx context.Context, hashHex, fileIndexStr s
 	if v, ok := h.hlsSegList.Load(key); ok {
 		return v.(*segList), nil
 	}
-	sl, err := h.buildSegList(ctx, hashHex, fileIndexStr)
+	// Coalesce concurrent cold builds: the video (v/index.m3u8) and audio (a/{rel}/index.m3u8) playlist
+	// requests arrive together and build the SAME list, and buildSegList blocks for tens of seconds on a
+	// cold torrent (duration probe + layout probe + Cues read). Without this, each request independently
+	// runs that wait and they compete for the same cold pieces. Detached ctx (context.Background()) so one
+	// caller disconnecting can't cancel the shared build for the other — every inner probe/read carries its
+	// own deadline (getOrProbeDuration 45s, layoutProbeDeadline 40s, indexReadDeadline 25s).
+	v, err, _ := h.hlsSegSFG.Do(key, func() (interface{}, error) {
+		if v, ok := h.hlsSegList.Load(key); ok {
+			return v.(*segList), nil
+		}
+		sl, berr := h.buildSegList(context.Background(), hashHex, fileIndexStr)
+		if berr != nil {
+			return nil, berr
+		}
+		h.hlsSegList.Store(key, sl)
+		return sl, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	h.hlsSegList.Store(key, sl)
-	return sl, nil
+	return v.(*segList), nil
 }
 
 func (h *HandlerContext) buildSegList(ctx context.Context, hashHex, fileIndexStr string) (*segList, error) {

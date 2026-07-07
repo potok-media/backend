@@ -16,6 +16,7 @@ import (
 type videoEncoder struct {
 	ofc    *astiav.FormatContext
 	outIdx int
+	w      *fragWriter // shared one-packet-delay writer: stamps exact per-packet durations (gapless segments)
 
 	dec    *astiav.CodecContext
 	enc    *astiav.CodecContext
@@ -23,14 +24,47 @@ type videoEncoder struct {
 	decFrm *astiav.Frame
 	scaled *astiav.Frame
 	pkt    *astiav.Packet
+	bsf    *astiav.BitStreamFilterContext // mpeg4_unpack_bframes for DivX/Xvid packed bitstream; nil otherwise
+	bsfPkt *astiav.Packet                 // scratch for BSF output packets; nil when bsf is nil
 
 	startTS int64
 	endTS   int64
+	lastPTS int64 // last decoded-frame pts fed to the encoder — monotonic guard (noPTS = none yet)
+	lastDTS int64 // last output-packet dts written to the muxer — monotonic guard (noPTS = none yet)
+}
+
+// mpeg4UnpackBSF returns an initialized mpeg4_unpack_bframes bitstream filter for an MPEG-4 Part 2 (DivX/Xvid)
+// input stream, or (nil,nil) for any other codec / if the filter is unavailable. DivX/Xvid PACKED BITSTREAM
+// stores a P-frame and the following B-frame in ONE packet; decoded raw that yields frames with non-monotonic
+// / NOPTS timestamps, which make libx264 emit a dts the mp4 muxer rejects (hard 500). The filter splits them
+// into one clean packet per frame. Best-effort: any setup error → no filter (falls back to raw decode).
+func mpeg4UnpackBSF(in *astiav.Stream) (*astiav.BitStreamFilterContext, *astiav.Packet) {
+	if in.CodecParameters().CodecID() != astiav.CodecIDMpeg4 {
+		return nil, nil
+	}
+	bsf := astiav.FindBitStreamFilterByName("mpeg4_unpack_bframes")
+	if bsf == nil {
+		return nil, nil
+	}
+	bsfc, err := astiav.AllocBitStreamFilterContext(bsf)
+	if err != nil {
+		return nil, nil
+	}
+	if err := in.CodecParameters().Copy(bsfc.InputCodecParameters()); err != nil {
+		bsfc.Free()
+		return nil, nil
+	}
+	bsfc.SetInputTimeBase(in.TimeBase())
+	if err := bsfc.Initialize(); err != nil {
+		bsfc.Free()
+		return nil, nil
+	}
+	return bsfc, astiav.AllocPacket()
 }
 
 // newVideoEncoder wires the decode→(scale)→H.264-encode pipeline for input stream srcIdx and adds the
 // H.264 output stream to ofc (before WriteHeader). Caller must free() it.
-func newVideoEncoder(ifc, ofc *astiav.FormatContext, srcIdx int, startTS, endTS int64) (*videoEncoder, error) {
+func newVideoEncoder(ifc, ofc *astiav.FormatContext, srcIdx int, startTS, endTS int64, fw *fragWriter) (*videoEncoder, error) {
 	in := ifc.Streams()[srcIdx]
 
 	decCodec := astiav.FindDecoder(in.CodecParameters().CodecID())
@@ -91,21 +125,33 @@ func newVideoEncoder(ifc, ofc *astiav.FormatContext, srcIdx int, startTS, endTS 
 	}
 	out.SetTimeBase(enc.TimeBase())
 
+	bsf, bsfPkt := mpeg4UnpackBSF(in)
 	return &videoEncoder{
 		ofc:     ofc,
 		outIdx:  out.Index(),
+		w:       fw,
 		dec:     dec,
 		enc:     enc,
 		decFrm:  astiav.AllocFrame(),
 		scaled:  astiav.AllocFrame(),
 		pkt:     astiav.AllocPacket(),
+		bsf:     bsf,
+		bsfPkt:  bsfPkt,
 		startTS: startTS,
 		endTS:   endTS,
+		lastPTS: noPTS,
+		lastDTS: noPTS,
 	}, nil
 }
 
 func (v *videoEncoder) free() {
 	v.pkt.Free()
+	if v.bsfPkt != nil {
+		v.bsfPkt.Free()
+	}
+	if v.bsf != nil {
+		v.bsf.Free()
+	}
 	v.scaled.Free()
 	v.decFrm.Free()
 	if v.sws != nil {
@@ -115,8 +161,36 @@ func (v *videoEncoder) free() {
 	v.dec.Free()
 }
 
-// feed decodes one source video packet and encodes the resulting in-window frames.
+// feed runs one source video packet through the optional BSF, then decodes + encodes the in-window frames.
 func (v *videoEncoder) feed(pkt *astiav.Packet) error {
+	if v.bsf == nil {
+		return v.decodeAndDrain(pkt)
+	}
+	if err := v.bsf.SendPacket(pkt); err != nil {
+		return fmt.Errorf("media: video bsf send: %w", err)
+	}
+	return v.drainBSF()
+}
+
+// drainBSF pulls every packet the BSF emits for the last SendPacket and decodes each one.
+func (v *videoEncoder) drainBSF() error {
+	for {
+		err := v.bsf.ReceivePacket(v.bsfPkt)
+		if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("media: video bsf receive: %w", err)
+		}
+		derr := v.decodeAndDrain(v.bsfPkt)
+		v.bsfPkt.Unref()
+		if derr != nil {
+			return derr
+		}
+	}
+}
+
+func (v *videoEncoder) decodeAndDrain(pkt *astiav.Packet) error {
 	if err := v.dec.SendPacket(pkt); err != nil {
 		return fmt.Errorf("media: video send packet: %w", err)
 	}
@@ -132,11 +206,20 @@ func (v *videoEncoder) drainDecoder() error {
 		if err != nil {
 			return fmt.Errorf("media: video receive frame: %w", err)
 		}
+		// Only encode frames that sit on a strictly-increasing timeline inside the window. A frame with no
+		// pts, or a pts that regresses/repeats (residual packed-bitstream / VFR weirdness the BSF didn't
+		// resolve), can't be placed and would make libx264 emit a non-monotonic dts the muxer rejects.
 		pts := v.decFrm.Pts()
-		if pts != noPTS && (pts < v.startTS || pts >= v.endTS) {
-			v.decFrm.Unref() // out of segment window (pre-roll or next-segment spill)
+		if pts == noPTS || pts < v.startTS || pts >= v.endTS {
+			v.decFrm.Unref()
 			continue
 		}
+		if v.lastPTS != noPTS && pts <= v.lastPTS {
+			v.decFrm.Unref()
+			continue
+		}
+		v.lastPTS = pts
+		v.decFrm.SetPts(pts) // hand the encoder a clean, monotonic pts
 		if err := v.encodeDecoded(); err != nil {
 			v.decFrm.Unref()
 			return err
@@ -192,16 +275,36 @@ func (v *videoEncoder) encode(f *astiav.Frame) error {
 		}
 		v.pkt.SetStreamIndex(v.outIdx)
 		v.pkt.RescaleTs(v.enc.TimeBase(), v.ofc.Streams()[v.outIdx].TimeBase())
-		if err := v.ofc.WriteInterleavedFrame(v.pkt); err != nil {
+		// Belt-and-suspenders: keep output dts strictly increasing so the mp4 muxer can never hard-fail
+		// ("non monotonically increasing dts"), whatever the encoder emits (mirrors sanitizeCopyDTS).
+		if dts := v.pkt.Dts(); dts != noPTS {
+			if v.lastDTS != noPTS && dts <= v.lastDTS {
+				dts = v.lastDTS + 1
+				v.pkt.SetDts(dts)
+				if p := v.pkt.Pts(); p == noPTS || p < dts {
+					v.pkt.SetPts(dts)
+				}
+			}
+			v.lastDTS = dts
+		}
+		if err := v.w.write(v.pkt); err != nil {
 			v.pkt.Unref()
-			return fmt.Errorf("media: video write frame: %w", err)
+			return err
 		}
 		v.pkt.Unref()
 	}
 }
 
-// flush drains the decoder then the encoder.
+// flush drains the BSF (if any), then the decoder, then the encoder.
 func (v *videoEncoder) flush() error {
+	if v.bsf != nil {
+		if err := v.bsf.SendPacket(nil); err != nil && !errors.Is(err, astiav.ErrEof) {
+			return fmt.Errorf("media: flush video bsf: %w", err)
+		}
+		if err := v.drainBSF(); err != nil {
+			return err
+		}
+	}
 	if err := v.dec.SendPacket(nil); err != nil && !errors.Is(err, astiav.ErrEof) {
 		return fmt.Errorf("media: flush video decoder: %w", err)
 	}
