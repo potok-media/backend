@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"sync"
 
@@ -38,6 +39,8 @@ type aacFrame struct {
 // (SegmentFromAAC/InitFromAAC/Status) snapshot under mu.
 type ContinuousAAC struct {
 	mu         sync.Mutex
+	startSeg   int
+	startSec   float64
 	frames     []aacFrame              // append-only, pts-monotonic
 	sampleRate int                     // AAC output rate (== source rate)
 	codecPar   *astiav.CodecParameters // frozen AAC config (ASC extradata) for the init; nil until the encoder opens
@@ -49,7 +52,20 @@ type ContinuousAAC struct {
 }
 
 // NewContinuousAAC returns an empty cache. The owner starts Run in a goroutine and stores cancel via SetCancel.
-func NewContinuousAAC() *ContinuousAAC { return &ContinuousAAC{} }
+func NewContinuousAAC(startSeg int, startSec float64) *ContinuousAAC {
+	return &ContinuousAAC{
+		startSeg: startSeg,
+		startSec: startSec,
+	}
+}
+
+func (c *ContinuousAAC) StartSec() float64 {
+	return c.startSec
+}
+
+func (c *ContinuousAAC) StartSeg() int {
+	return c.startSeg
+}
 
 func (c *ContinuousAAC) SetCancel(cf context.CancelFunc) { c.cancel = cf }
 
@@ -129,6 +145,20 @@ func (c *ContinuousAAC) transcode(ctx context.Context, src io.ReadSeeker, srcIdx
 		return fmt.Errorf("media: audiocont: stream %d out of range (have %d)", srcIdx, len(inStreams))
 	}
 	in := inStreams[srcIdx]
+
+	if c.startSec > 0 {
+		seekIdx, seekTB := srcIdx, in.TimeBase()
+		for _, s := range inStreams {
+			if s.CodecParameters().MediaType() == astiav.MediaTypeVideo && !s.DispositionFlags().Has(astiav.DispositionFlagAttachedPic) {
+				seekIdx, seekTB = s.Index(), s.TimeBase()
+				break
+			}
+		}
+		ts := int64(c.startSec * float64(seekTB.Den()) / float64(seekTB.Num()))
+		if err := ifc.SeekFrame(seekIdx, ts, astiav.NewSeekFlags(astiav.SeekFlagBackward)); err != nil {
+			slog.Warn("audiocont: seek failed", "ts", ts, "err", err)
+		}
+	}
 
 	decCodec := astiav.FindDecoder(in.CodecParameters().CodecID())
 	if decCodec == nil {

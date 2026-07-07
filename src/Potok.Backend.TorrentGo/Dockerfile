@@ -21,14 +21,17 @@ ARG FFMPEG_VERSION
 ARG FFMPEG_PREFIX
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends git ca-certificates build-essential yasm nasm pkg-config libx264-dev; \
+    apt-get install -y --no-install-recommends git ca-certificates build-essential yasm nasm pkg-config libx264-dev libva-dev; \
+    git clone --depth 1 --branch n12.1.14.0 https://github.com/FFmpeg/nv-codec-headers.git /nv-codec-headers; \
+    cd /nv-codec-headers; \
+    make install PREFIX=/usr; \
     git clone --depth 1 --branch "${FFMPEG_VERSION}" https://github.com/FFmpeg/FFmpeg /src; \
     cd /src; \
     ./configure --prefix="${FFMPEG_PREFIX}" --enable-shared --disable-static --disable-programs --disable-doc \
-        --enable-gpl --enable-libx264; \
+        --enable-gpl --enable-libx264 --enable-vaapi --enable-nvenc; \
     make -j"$(nproc)"; \
     make install; \
-    rm -rf /src /var/lib/apt/lists/*
+    rm -rf /src /nv-codec-headers /var/lib/apt/lists/*
 # --enable-libx264 provides the software H.264 encoder the transcode path uses (FindEncoder(CodecIDH264)).
 # HARDWARE encoders get added next: --enable-vaapi (libva-dev) + --enable-nvenc (nv-codec-headers) so the
 # transcode can offload to the GPU; VideoToolbox is macOS-only (local dev builds get it via brew ffmpeg@7).
@@ -39,7 +42,7 @@ ARG FFMPEG_PREFIX
 # libx264-dev: our ffmpeg was built with --enable-libx264, so libavcodec.so has a DT_NEEDED on libx264.so.164.
 # libx264 is a Debian system lib (NOT under /opt/ffmpeg), so `COPY --from=ffmpeg ${FFMPEG_PREFIX}` doesn't carry
 # it — without this the cgo link fails with `undefined reference to x264_*`. Same bookworm base ⇒ same soname 164.
-RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libx264-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libx264-dev libva-dev && rm -rf /var/lib/apt/lists/*
 COPY --from=ffmpeg ${FFMPEG_PREFIX} ${FFMPEG_PREFIX}
 ENV CGO_ENABLED=1 \
     CGO_CFLAGS="-I${FFMPEG_PREFIX}/include" \
@@ -58,7 +61,7 @@ RUN go build -ldflags="-w -s" -o potok-torrent-go .
 FROM debian:bookworm-slim
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates tzdata libchromaprint-tools libx264-164; \
+    apt-get install -y --no-install-recommends ca-certificates tzdata libchromaprint-tools libx264-164 libva2 libva-drm2; \
     rm -rf /var/lib/apt/lists/*
 # libx264-164: our /opt/ffmpeg libavcodec.so links libx264 at runtime (--enable-libx264). It's a Debian system
 # lib, not part of the copied /opt/ffmpeg, so the runtime needs it or the in-process media/ engine can't load.

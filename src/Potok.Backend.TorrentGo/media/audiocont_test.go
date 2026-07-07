@@ -57,7 +57,7 @@ func TestContinuousAACAbuts(t *testing.T) {
 	}
 
 	// Transcode the whole track once (synchronous over a plain file — a valid io.ReadSeeker).
-	cont := NewContinuousAAC()
+	cont := NewContinuousAAC(0, 0)
 	fr, err := os.Open(audioContTestFile)
 	if err != nil {
 		t.Fatal(err)

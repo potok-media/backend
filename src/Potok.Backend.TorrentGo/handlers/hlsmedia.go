@@ -160,7 +160,7 @@ func (h *HandlerContext) produceAudioInit(ctx context.Context, hashHex, fileInde
 	// Non-AAC: the init comes from the continuous-AAC transcoder's frozen codec config, not a per-segment
 	// encoder — so init + every segment describe the identical AAC stream (see continuous-AAC plan).
 	if layout.audioCodecs[rel] != "aac" {
-		cont, cerr := h.getAudioCont(ctx, hashHex, fileIndexStr, rel)
+		cont, cerr := h.getAudioCont(ctx, hashHex, fileIndexStr, rel, nil, 0)
 		if cerr != nil {
 			return nil, cerr
 		}
@@ -187,7 +187,7 @@ func (h *HandlerContext) produceAudioSegment(ctx context.Context, hashHex, fileI
 	// Per-segment re-encoding (the else branch's transcode) gives each segment its own AAC frame phase → overlap
 	// → hls.js bufferAppendError. AAC source tiles fine as a plain copy.
 	if layout.audioCodecs[rel] != "aac" {
-		cont, cerr := h.getAudioCont(ctx, hashHex, fileIndexStr, rel)
+		cont, cerr := h.getAudioCont(ctx, hashHex, fileIndexStr, rel, sl, n)
 		if cerr != nil {
 			return nil, cerr
 		}

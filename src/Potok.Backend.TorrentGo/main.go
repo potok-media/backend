@@ -93,6 +93,7 @@ func main() {
 	// rather than on the first segment request.
 	if media.LibavLinked() {
 		slog.Info("libav linked — in-process media core available")
+		media.InitGPU()
 	} else {
 		slog.Warn("libav NOT linked — in-process media core unavailable")
 	}

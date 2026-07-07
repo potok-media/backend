@@ -22,10 +22,44 @@ const audioContWaitDeadline = 40 * time.Second
 // getAudioCont returns the continuous-AAC transcoder for one non-AAC audio track, starting it (once) if needed.
 // Coalesced via singleflight so concurrent init/segment requests share one transcoder; the goroutine is detached
 // (context.Background) so a caller leaving doesn't cancel it for the rest, and cancellable on dropTorrent.
-func (h *HandlerContext) getAudioCont(ctx context.Context, hashHex, fileIndexStr string, rel int) (*media.ContinuousAAC, error) {
+func (h *HandlerContext) getAudioCont(ctx context.Context, hashHex, fileIndexStr string, rel int, sl *segList, n int) (*media.ContinuousAAC, error) {
 	key := fmt.Sprintf("%s_%s_%d", hashHex, fileIndexStr, rel)
 	if v, ok := h.audioCont.Load(key); ok {
-		return v.(*media.ContinuousAAC), nil
+		cont := v.(*media.ContinuousAAC)
+		if sl == nil {
+			return cont, nil
+		}
+		startSec := cont.StartSec()
+		producedTo, _, _ := cont.Status()
+		sr := cont.SampleRate()
+
+		lo := sl.srcStart(n)
+		duration := sl.extinf(n)
+
+		isSeek := false
+		if lo < startSec {
+			isSeek = true
+		} else if sr > 0 {
+			producedToSec := startSec + float64(producedTo)/float64(sr)
+			if lo > producedToSec+1.5*duration {
+				isSeek = true
+			}
+		}
+
+		if !isSeek {
+			return cont, nil
+		}
+
+		slog.Info("Audio track seek/track-switch detected, restarting continuous transcoder",
+			"track", rel,
+			"fromSec", startSec,
+			"toSec", lo,
+			"producedToSec", startSec+float64(producedTo)/float64(sr),
+			"segmentDuration", duration,
+		)
+		cont.Cancel()
+		cont.Free()
+		h.audioCont.Delete(key)
 	}
 	v, err, _ := h.audioContSFG.Do(key, func() (interface{}, error) {
 		if v, ok := h.audioCont.Load(key); ok {
@@ -40,7 +74,12 @@ func (h *HandlerContext) getAudioCont(ctx context.Context, hashHex, fileIndexStr
 		}
 		srcIdx := layout.audios[rel]
 
-		cont := media.NewContinuousAAC()
+		var startSec float64 = 0
+		if sl != nil && n > 0 {
+			startSec = sl.srcStart(n)
+		}
+
+		cont := media.NewContinuousAAC(n, startSec)
 		bgCtx, cancel := context.WithCancel(context.Background())
 		cont.SetCancel(cancel)
 		h.audioCont.Store(key, cont)

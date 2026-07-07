@@ -47,7 +47,7 @@ func (h *HandlerContext) HandleGetMediaMetadata(w http.ResponseWriter, r *http.R
 		// its frames are already filling by the time hls.js requests audio seg 0. Other tracks start lazily on
 		// first request; AAC-source tracks need no transcoder (plain copy path).
 		if lerr == nil && len(layout.audioCodecs) > 0 && layout.audioCodecs[0] != "aac" {
-			_, _ = h.getAudioCont(context.Background(), hashHex, fileIndexStr, 0)
+			_, _ = h.getAudioCont(context.Background(), hashHex, fileIndexStr, 0, nil, 0)
 		}
 	}()
 
