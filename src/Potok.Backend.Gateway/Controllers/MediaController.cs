@@ -4,7 +4,6 @@ using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Core.Models;
 using Potok.Backend.Infrastructure.Gateway.Services;
 using ILogger = Serilog.ILogger;
-using System.Text.Json;
 using System.Security.Claims;
 
 namespace Potok.Backend.Gateway.Controllers;
@@ -18,8 +17,6 @@ public class MediaController : ControllerBase
     private readonly IMediaOrchestrator _orchestrator;
     private readonly TmdbClient _tmdbClient;
     private readonly ILogger _logger;
-    private readonly ITorrentRepository _torrentRepository;
-    private readonly IEventBroadcaster _eventBroadcaster;
     private readonly IUserRepository _userRepository;
 
     public MediaController(
@@ -27,16 +24,12 @@ public class MediaController : ControllerBase
         IMediaOrchestrator orchestrator,
         TmdbClient tmdbClient,
         ILogger logger,
-        ITorrentRepository torrentRepository,
-        IEventBroadcaster eventBroadcaster,
         IUserRepository userRepository)
     {
         _homeService = homeService;
         _orchestrator = orchestrator;
         _tmdbClient = tmdbClient;
         _logger = logger;
-        _torrentRepository = torrentRepository;
-        _eventBroadcaster = eventBroadcaster;
         _userRepository = userRepository;
     }
 
@@ -144,49 +137,6 @@ public class MediaController : ControllerBase
         return Ok(cards.Where(c => c != null));
     }
 
-    [HttpGet("override/{hash}")]
-    public async Task<IActionResult> GetOverride(string hash)
-    {
-        if (string.IsNullOrEmpty(hash)) return BadRequest("Hash is required");
-        var result = await _torrentRepository.GetOverrideAsync(hash.ToLower());
-        if (result == null) return NotFound();
-        return Ok(result);
-    }
-
-    [HttpPost("override/batch")]
-    public async Task<IActionResult> GetBatchOverrides([FromBody] List<string> hashes)
-    {
-        if (hashes == null || !hashes.Any()) return Ok(new Dictionary<string, object>());
-        var result = new Dictionary<string, object>();
-        foreach (var hash in hashes)
-        {
-            if (string.IsNullOrEmpty(hash)) continue;
-            var ov = await _torrentRepository.GetOverrideAsync(hash.ToLower());
-            if (ov != null)
-            {
-                result[hash.ToLower()] = ov;
-            }
-        }
-        return Ok(result);
-    }
-
-    [HttpPost("override")]
-    public async Task<IActionResult> SaveOverride([FromBody] JsonElement body)
-    {
-        var hash = body.GetProperty("hash").GetString();
-        var overrideObj = body.GetProperty("override");
-        
-        int? season = overrideObj.TryGetProperty("season", out var s) ? s.GetInt32() : null;
-        int? offset = overrideObj.TryGetProperty("episodeOffset", out var o) ? o.GetInt32() : null;
-
-        if (string.IsNullOrEmpty(hash)) return BadRequest("Hash is required");
-
-        var cleanHash = hash.ToLower();
-
-        await _torrentRepository.SetOverrideAsync(cleanHash, season, offset);
-        _eventBroadcaster.Publish("override-updated", new { hash = cleanHash, season = season, episodeOffset = offset });
-        return Ok(new { success = true });
-    }
 }
 
 public record BatchMediaRequest(System.Collections.Generic.List<BatchMediaItem> Items);

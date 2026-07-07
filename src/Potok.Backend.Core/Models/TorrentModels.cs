@@ -14,8 +14,6 @@ public record TorrentSearchRequest(
 
 public record TorrentTag(string Kind, string Value);
 
-public record TorrentOverride(string Hash, int? Season, int? EpisodeOffset);
-
 public record TorrentSearchResult(
     string Id,
     string Title,
@@ -28,8 +26,7 @@ public record TorrentSearchResult(
     string? MagnetUri = null,
     string? Link = null,
     IEnumerable<TorrentTag>? Tags = null,
-    bool? Viewed = null,
-    TorrentOverride? Override = null
+    bool? Viewed = null
 );
 
 public record TorrentSearchResponse(IEnumerable<TorrentSearchResult> Results);
@@ -76,3 +73,12 @@ public record TorrentStreamRequest(
 );
 
 public record TorrentStreamResponse(string? StreamUrl);
+
+// Per-season override model (stored in SearchEngine, keyed by torrent infohash). season_map keys are source-season
+// numbers as strings; the sentinel "_" buckets files with no parseable season. Each entry remaps that source
+// season to a TMDB (Season, Offset): displayedEpisode = parsedEpisode + Offset.
+public record SeasonOverrideEntry(int Season, int Offset);
+
+public record TorrentOverrideMap(string Hash, Dictionary<string, SeasonOverrideEntry> SeasonMap);
+
+public record UpsertSeasonOverrideRequest(int? SourceSeason, int TargetSeason, int Offset);

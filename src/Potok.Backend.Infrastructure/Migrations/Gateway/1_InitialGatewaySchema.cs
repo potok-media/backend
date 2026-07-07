@@ -11,10 +11,7 @@ public class InitialGatewaySchema : Migration
         var schema = DbSchema.GatewayRaw;
         Execute.Sql($"CREATE SCHEMA IF NOT EXISTS \"{schema}\";");
 
-        Create.Table("torrent_overrides").InSchema(schema)
-            .WithColumn("hash").AsString().PrimaryKey()
-            .WithColumn("season").AsInt32().Nullable()
-            .WithColumn("episode_offset").AsInt32().Nullable();
+        // torrent_overrides moved to the SearchEngine schema (see SearchEngine migration 2 + gateway migration 2).
 
         Create.Table("users").InSchema(schema)
             .WithColumn("id").AsGuid().PrimaryKey()
@@ -71,7 +68,6 @@ public class InitialGatewaySchema : Migration
         Delete.Table("user_history").InSchema(schema);
         Delete.Table("user_trakt_tokens").InSchema(schema);
         Delete.Table("users").InSchema(schema);
-        Delete.Table("torrent_overrides").InSchema(schema);
         Execute.Sql($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE;");
     }
 }

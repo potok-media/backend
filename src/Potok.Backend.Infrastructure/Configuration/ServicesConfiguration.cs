@@ -37,6 +37,7 @@ public static class ServicesConfiguration
             .AddScoped<ITorrentRepository, TorrentRepository>()
             .AddScoped<IQueriesRepository, QueriesRepository>()
             .AddScoped<ISubscriptionRepository, SubscriptionRepository>()
+            .AddScoped<ISeasonOverrideRepository, SeasonOverrideRepository>()
             .AddScoped<ITorrentEnricher, TorrentEnricher>()
             .AddScoped<ILocalSearchService, LocalSearchService>()
             .AddScoped<ITorrentMediaProbeService, TorrentMediaProbeService>()

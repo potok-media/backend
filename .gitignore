@@ -401,3 +401,4 @@ src/Potok.Backend.Gateway/settings.sqlite
 src/Potok.Backend.SearchEngine/config.local.yml
 .worktrees/
 /src/Potok.Backend.TorrentGo/torrent-cache/
+/src/Potok.Backend.TorrentGo/Potok.Backend.TorrentGo

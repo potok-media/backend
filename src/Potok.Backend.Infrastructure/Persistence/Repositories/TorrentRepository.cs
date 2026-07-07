@@ -14,7 +14,6 @@ namespace Potok.Backend.Infrastructure.Persistence.Repositories;
 public class TorrentRepository : ITorrentRepository
 {
     private const string SearchEngineSchema = DbSchema.SearchEngine;
-    private const string GatewaySchema = DbSchema.Gateway;
     private readonly string _connectionString;
     private readonly ITorrentEnricher _torrentEnricher;
     private readonly ILogger<TorrentRepository> _logger;
@@ -128,28 +127,5 @@ public class TorrentRepository : ITorrentRepository
     {
         // Migrations handle database creation
         await Task.CompletedTask;
-    }
-
-    public async Task<TorrentOverride?> GetOverrideAsync(string hash)
-    {
-        var cleanHash = hash?.ToLower() ?? string.Empty;
-        await using var connection = new NpgsqlConnection(_connectionString);
-        await connection.OpenAsync();
-        var sql = $@"SELECT hash, season, episode_offset as EpisodeOffset FROM {GatewaySchema}.torrent_overrides WHERE hash = @Hash";
-        return await connection.QuerySingleOrDefaultAsync<TorrentOverride>(sql, new { Hash = cleanHash });
-    }
-
-    public async Task SetOverrideAsync(string hash, int? season, int? episodeOffset)
-    {
-        var cleanHash = hash?.ToLower() ?? string.Empty;
-        await using var connection = new NpgsqlConnection(_connectionString);
-        await connection.OpenAsync();
-        var sql = $@"
-            INSERT INTO {GatewaySchema}.torrent_overrides (hash, season, episode_offset) 
-            VALUES (@Hash, @Season, @Offset)
-            ON CONFLICT (hash) DO UPDATE SET 
-                season = EXCLUDED.season, 
-                episode_offset = EXCLUDED.episode_offset";
-        await connection.ExecuteAsync(sql, new { Hash = cleanHash, Season = season, Offset = episodeOffset });
     }
 }
