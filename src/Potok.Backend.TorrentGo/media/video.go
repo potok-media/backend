@@ -30,10 +30,11 @@ type videoEncoder struct {
 	bsf         *astiav.BitStreamFilterContext // mpeg4_unpack_bframes for DivX/Xvid packed bitstream; nil otherwise
 	bsfPkt      *astiav.Packet                 // scratch for BSF output packets; nil when bsf is nil
 
-	startTS int64
-	endTS   int64
-	lastPTS int64 // last decoded-frame pts fed to the encoder — monotonic guard (noPTS = none yet)
-	lastDTS int64 // last output-packet dts written to the muxer — monotonic guard (noPTS = none yet)
+	startTS    int64
+	endTS      int64
+	lastPTS    int64 // last decoded-frame pts fed to the encoder — monotonic guard (noPTS = none yet)
+	lastDTS    int64 // last output-packet dts written to the muxer — monotonic guard (noPTS = none yet)
+	inTimeBase astiav.Rational
 }
 
 // mpeg4UnpackBSF returns an initialized mpeg4_unpack_bframes bitstream filter for an MPEG-4 Part 2 (DivX/Xvid)
@@ -189,8 +190,28 @@ func newVideoEncoder(ifc, ofc *astiav.FormatContext, srcIdx int, startTS, endTS 
 
 	if hwDevCtx != nil {
 		enc.SetHardwareDeviceContext(hwDevCtx)
-		if encPixFmt == astiav.PixelFormatVaapi && dec.HardwareFramesContext() != nil {
-			enc.SetHardwareFramesContext(dec.HardwareFramesContext())
+		if encPixFmt == astiav.PixelFormatVaapi {
+			hwFramesCtx := astiav.AllocHardwareFramesContext(hwDevCtx)
+			if hwFramesCtx == nil {
+				dec.Free()
+				enc.Free()
+				hwDevCtx.Free()
+				return nil, fmt.Errorf("media: alloc hardware frames context")
+			}
+			hwFramesCtx.SetHardwarePixelFormat(astiav.PixelFormatVaapi)
+			hwFramesCtx.SetSoftwarePixelFormat(astiav.PixelFormatNv12)
+			hwFramesCtx.SetWidth(dec.Width())
+			hwFramesCtx.SetHeight(dec.Height())
+			hwFramesCtx.SetInitialPoolSize(20)
+			if err := hwFramesCtx.Initialize(); err != nil {
+				hwFramesCtx.Free()
+				dec.Free()
+				enc.Free()
+				hwDevCtx.Free()
+				return nil, fmt.Errorf("media: initialize hardware frames context: %w", err)
+			}
+			enc.SetHardwareFramesContext(hwFramesCtx)
+			hwFramesCtx.Free()
 		}
 	}
 
@@ -255,6 +276,7 @@ func newVideoEncoder(ifc, ofc *astiav.FormatContext, srcIdx int, startTS, endTS 
 		dec:         dec,
 		enc:         enc,
 		hwDevCtx:    hwDevCtx,
+		inTimeBase:  in.TimeBase(),
 		decFrm:      astiav.AllocFrame(),
 		transferFrm: transferFrm,
 		scaled:      astiav.AllocFrame(),
@@ -393,6 +415,11 @@ func (v *videoEncoder) encodeDecoded() error {
 		v.scaled.SetPts(frame.Pts())
 		frame = v.scaled
 	}
+
+	// Rescale PTS to encoder timebase to prevent timebase mismatch (R6)
+	pts := astiav.RescaleQ(frame.Pts(), v.inTimeBase, v.enc.TimeBase())
+	frame.SetPts(pts)
+
 	// Clear the source picture type: a uniform-grid segment starts MID-GOP, so the decoded first frame is
 	// a B/P frame. Passing that type to libx264 conflicts with "frame 0 must be an IDR" ("specified frame
 	// type … not compatible with keyframe interval") and skews frame typing. NONE lets the encoder decide.
