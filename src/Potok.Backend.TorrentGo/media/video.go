@@ -160,13 +160,18 @@ func newVideoEncoder(ifc, ofc *astiav.FormatContext, srcIdx int, startTS, endTS 
 	// Decide pixel format for encoder
 	var encPixFmt astiav.PixelFormat = astiav.PixelFormatYuv420P
 	hasNv12 := false
+	hasVaapi := false
 	for _, pf := range encCodec.PixelFormats() {
 		if pf == astiav.PixelFormatNv12 {
 			hasNv12 = true
-			break
+		}
+		if pf == astiav.PixelFormatVaapi {
+			hasVaapi = true
 		}
 	}
-	if hasNv12 && (encCodec.Name() == "h264_videotoolbox" || encCodec.Name() == "h264_nvenc" || encCodec.Name() == "h264_vaapi") {
+	if hasVaapi && encCodec.Name() == "h264_vaapi" {
+		encPixFmt = astiav.PixelFormatVaapi
+	} else if hasNv12 && (encCodec.Name() == "h264_videotoolbox" || encCodec.Name() == "h264_nvenc") {
 		encPixFmt = astiav.PixelFormatNv12
 	}
 	enc.SetPixelFormat(encPixFmt)
@@ -184,6 +189,9 @@ func newVideoEncoder(ifc, ofc *astiav.FormatContext, srcIdx int, startTS, endTS 
 
 	if hwDevCtx != nil {
 		enc.SetHardwareDeviceContext(hwDevCtx)
+		if encPixFmt == astiav.PixelFormatVaapi && dec.HardwareFramesContext() != nil {
+			enc.SetHardwareFramesContext(dec.HardwareFramesContext())
+		}
 	}
 
 	if ofc.OutputFormat().Flags().Has(astiav.IOFormatFlagGlobalheader) {
@@ -236,7 +244,7 @@ func newVideoEncoder(ifc, ofc *astiav.FormatContext, srcIdx int, startTS, endTS 
 
 	bsf, bsfPkt := mpeg4UnpackBSF(in)
 	var transferFrm *astiav.Frame
-	if hwDevCtx != nil {
+	if hwDevCtx != nil && encPixFmt != astiav.PixelFormatVaapi {
 		transferFrm = astiav.AllocFrame()
 	}
 
