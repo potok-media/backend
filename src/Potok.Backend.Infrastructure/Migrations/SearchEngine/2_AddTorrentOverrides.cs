@@ -19,6 +19,6 @@ public class AddTorrentOverrides : Migration
 
     public override void Down()
     {
-        Delete.Table("torrent_overrides").InSchema(DbSchema.SearchEngineRaw);
+        Delete.Table("torrent_overrides").IfExists().InSchema(DbSchema.SearchEngineRaw);
     }
 }

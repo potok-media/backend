@@ -10,7 +10,7 @@ public class DropTorrentOverrides : Migration
 {
     public override void Up()
     {
-        Delete.Table("torrent_overrides").InSchema(DbSchema.GatewayRaw);
+        Delete.Table("torrent_overrides").IfExists().InSchema(DbSchema.GatewayRaw);
     }
 
     public override void Down()
