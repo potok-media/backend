@@ -53,6 +53,7 @@ public record WatchedEpisode(
 );
 
 public record MediaCredit(
+    [property: JsonPropertyName("id"), JsonProperty("id")] long Id,
     [property: JsonPropertyName("name"), JsonProperty("name")] string Name,
     [property: JsonPropertyName("role"), JsonProperty("role")] string? Role,
     [property: JsonPropertyName("imageSrc"), JsonProperty("imageSrc")] string? ImageSrc

@@ -248,6 +248,7 @@ public static class MediaMapper
     private static IEnumerable<MediaCredit>? MapCredits(IEnumerable<TmdbCast>? cast, string? baseUrl)
     {
         return cast?.OrderBy(c => c.Order).Take(50).Select(c => new MediaCredit(
+            Id: c.Id,
             Name: c.Name ?? "Unknown",
             Role: c.Character,
             ImageSrc: BuildUrl(baseUrl, "profile", "w185", c.ProfilePath)
@@ -257,6 +258,7 @@ public static class MediaMapper
     private static IEnumerable<MediaCredit>? MapCrew(IEnumerable<TmdbCrew>? crew, string? baseUrl, string job)
     {
         return crew?.Where(c => c.Job == job).Select(c => new MediaCredit(
+            Id: c.Id,
             Name: c.Name ?? "Unknown",
             Role: c.Job,
             ImageSrc: BuildUrl(baseUrl, "profile", "w185", c.ProfilePath)
