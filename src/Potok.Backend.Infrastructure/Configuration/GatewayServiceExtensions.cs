@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Potok.Backend.Core.Interfaces.Gateway;
+using Potok.Backend.Core.Models.SearchEngine.Options;
 using Potok.Backend.Infrastructure.Gateway.Services;
 using Potok.Backend.Infrastructure.Persistence.Repositories;
 using Potok.Backend.Infrastructure.SearchEngine.Services;
@@ -14,6 +15,7 @@ public static class GatewayServiceExtensions
         IConfiguration configuration)
     {
         services.Configure<GatewayOptions>(configuration.GetSection("Gateway"));
+        services.Configure<Config>(options => options.Cache.Enable = true);
 
         services
             .AddScoped<IUserRepository, UserRepository>()

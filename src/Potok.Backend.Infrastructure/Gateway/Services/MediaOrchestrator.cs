@@ -126,7 +126,7 @@ public class MediaOrchestrator : IMediaOrchestrator
             await Task.WhenAll(movieTask, tvTask);
             var results = new List<MediaCard>();
             
-            if (movieTask.Result != null && !string.IsNullOrEmpty(movieTask.Result.Title)) 
+            if (movieTask.Result != null && !string.IsNullOrEmpty(movieTask.Result.Title))
             {
                 results.Add(MediaMapper.MapToMediaCard(movieTask.Result, baseUrl, language: _tmdbClient.CurrentLanguage));
             }
@@ -142,7 +142,7 @@ public class MediaOrchestrator : IMediaOrchestrator
         var response = await _tmdbClient.GetAsync<TmdbPagedResponse<TmdbMultiSearchResult>>(path);
         
         return response?.Results
-            .Select(item => MediaMapper.MapToMediaCard(item, baseUrl)) 
+            .Select(item => MediaMapper.MapToMediaCard(item, baseUrl))
             ?? Enumerable.Empty<MediaCard>();
     }
 
@@ -169,27 +169,15 @@ public class MediaOrchestrator : IMediaOrchestrator
         return season != null ? MediaMapper.MapToMediaSeason(season, baseUrl) : null;
     }
 
-    private static readonly Dictionary<string, (string Path, string MediaType)> RowDefinitions = new()
-    {
-        ["movie.now-playing"] = ("movie/now_playing", "movie"),
-        ["movie.trending-day"] = ("trending/movie/day", "movie"),
-        ["movie.trending-week"] = ("trending/movie/week", "movie"),
-        ["movie.upcoming"] = ("movie/upcoming", "movie"),
-        ["movie.popular"] = ("movie/popular", "movie"),
-        ["tv.popular"] = ("trending/tv/week", "tv"),
-        ["movie.top-rated"] = ("movie/top_rated", "movie"),
-        ["tv.top-rated"] = ("tv/top_rated", "tv")
-    };
-
     public async Task<IEnumerable<MediaCard>> GetMediaRowAsync(string rowId, int page, string baseUrl)
     {
         string? tmdbPath = null;
         string? mediaType = null;
 
-        if (RowDefinitions.TryGetValue(rowId, out var def))
+        if (HomeRowCatalog.TryGetDefinition(rowId, out var catalogDef))
         {
-            tmdbPath = def.Path;
-            mediaType = def.MediaType;
+            tmdbPath = catalogDef.Path;
+            mediaType = catalogDef.MediaType;
         }
         else if (rowId.StartsWith("genre.", StringComparison.OrdinalIgnoreCase))
         {
@@ -208,7 +196,7 @@ public class MediaOrchestrator : IMediaOrchestrator
         var response = await _tmdbClient.GetAsync<TmdbPagedResponse<TmdbMultiSearchResult>>(tmdbPath, page: page);
         
         return response?.Results?
-            .Select(item => MediaMapper.MapToMediaCard(item with { MediaType = mediaType ?? item.MediaType }, baseUrl)) 
+            .Select(item => MediaMapper.MapToMediaCard(item with { MediaType = mediaType ?? item.MediaType }, baseUrl))
             ?? Enumerable.Empty<MediaCard>();
     }
 

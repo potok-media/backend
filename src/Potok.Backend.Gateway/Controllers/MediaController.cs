@@ -15,20 +15,17 @@ public class MediaController : ControllerBase
 {
     private readonly IHomeService _homeService;
     private readonly IMediaOrchestrator _orchestrator;
-    private readonly TmdbClient _tmdbClient;
     private readonly ILogger _logger;
     private readonly IUserRepository _userRepository;
 
     public MediaController(
         IHomeService homeService,
         IMediaOrchestrator orchestrator,
-        TmdbClient tmdbClient,
         ILogger logger,
         IUserRepository userRepository)
     {
         _homeService = homeService;
         _orchestrator = orchestrator;
-        _tmdbClient = tmdbClient;
         _logger = logger;
         _userRepository = userRepository;
     }

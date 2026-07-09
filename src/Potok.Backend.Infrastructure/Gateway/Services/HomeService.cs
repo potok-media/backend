@@ -6,19 +6,9 @@ namespace Potok.Backend.Infrastructure.Gateway.Services;
 
 public class HomeService : IHomeService
 {
-    private readonly TmdbClient _tmdbClient;
+    private const int DedupPriorityRowCount = 3;
 
-    private static readonly List<RowDefinition> RowDefinitions = new()
-    {
-        new("movie.now-playing", "В кинотеатрах", "movie/now_playing", "movie"),
-        new("movie.trending-day", "Тренды дня", "trending/movie/day", "movie"),
-        new("movie.trending-week", "Тренды недели", "trending/movie/week", "movie"),
-        new("movie.upcoming", "Скоро выйдет", "movie/upcoming", "movie"),
-        new("movie.popular", "Популярные фильмы", "movie/popular", "movie"),
-        new("tv.popular", "Популярные сериалы", "trending/tv/week", "tv"),
-        new("movie.top-rated", "Лучшие фильмы", "movie/top_rated", "movie"),
-        new("tv.top-rated", "Лучшие сериалы", "tv/top_rated", "tv")
-    };
+    private readonly TmdbClient _tmdbClient;
 
     public HomeService(TmdbClient tmdbClient)
     {
@@ -26,16 +16,13 @@ public class HomeService : IHomeService
     }
 
     public async Task<HomeResponse> GetHomeFeedAsync(
-        string? baseUrl = null, 
-        string posterSize = "w780", 
-        string backdropSize = "w1280", 
+        string? baseUrl = null,
+        string posterSize = "w780",
+        string backdropSize = "w1280",
         string logoSize = "original")
     {
-        List<RowDefinition> targetRowDefinitions = RowDefinitions;
-        string? nextCursor = null;
-        bool fetchHero = true;
+        var targetRowDefinitions = HomeRowCatalog.GetActiveRows();
 
-        // 1. Start fetching rows in parallel
         var rowsTasks = targetRowDefinitions.Select(async def =>
         {
             try
@@ -55,7 +42,6 @@ public class HomeService : IHomeService
         });
         var allRowsTask = Task.WhenAll(rowsTasks);
 
-        // 2. Start fetching hero items (requires trending list first, then details)
         async Task<IEnumerable<HeroItem>> GetHeroItemsInternalAsync()
         {
             try
@@ -72,7 +58,6 @@ public class HomeService : IHomeService
                         var id = item.Id;
                         var mediaType = item.MediaType ?? "movie";
 
-                        // Get full detail with images for the logo
                         if (mediaType == "movie")
                         {
                             var movie = await _tmdbClient.GetAsync<TmdbMovie>($"{mediaType}/{id}?append_to_response=images,translations&include_image_language=ru,en,null");
@@ -80,13 +65,11 @@ public class HomeService : IHomeService
                             var card = MediaMapper.MapToMediaCard(movie, baseUrl, posterSize, backdropSize, logoSize, _tmdbClient.CurrentLanguage);
                             return new HeroItem(Id: card.Id, Card: card, BackdropSrc: card.BackdropSrc);
                         }
-                        else
-                        {
-                            var tv = await _tmdbClient.GetAsync<TmdbTvShow>($"{mediaType}/{id}?append_to_response=images,translations&include_image_language=ru,en,null");
-                            if (tv == null) return null;
-                            var card = MediaMapper.MapToMediaCard(tv, baseUrl, posterSize, backdropSize, logoSize, _tmdbClient.CurrentLanguage);
-                            return new HeroItem(Id: card.Id, Card: card, BackdropSrc: card.BackdropSrc);
-                        }
+
+                        var tv = await _tmdbClient.GetAsync<TmdbTvShow>($"{mediaType}/{id}?append_to_response=images,translations&include_image_language=ru,en,null");
+                        if (tv == null) return null;
+                        var tvCard = MediaMapper.MapToMediaCard(tv, baseUrl, posterSize, backdropSize, logoSize, _tmdbClient.CurrentLanguage);
+                        return new HeroItem(Id: tvCard.Id, Card: tvCard, BackdropSrc: tvCard.BackdropSrc);
                     }
                     catch
                     {
@@ -102,17 +85,57 @@ public class HomeService : IHomeService
                 return Enumerable.Empty<HeroItem>();
             }
         }
-        
-        var heroTask = fetchHero ? GetHeroItemsInternalAsync() : Task.FromResult(Enumerable.Empty<HeroItem>());
 
-        // Wait for both tracks to complete
+        var heroTask = GetHeroItemsInternalAsync();
+
         await Task.WhenAll(allRowsTask, heroTask);
 
-        var rows = (await allRowsTask).Where(r => r != null).Cast<MediaRow>();
-        var heroItems = await heroTask;
+        var heroItems = (await heroTask).ToList();
+        var rows = DeduplicateRows(heroItems, (await allRowsTask).Where(r => r != null).Cast<MediaRow>());
 
-        return new HomeResponse(heroItems, rows, nextCursor);
+        return new HomeResponse(heroItems, rows, null);
     }
 
-    private record RowDefinition(string Id, string Title, string Path, string MediaType);
+    private static IEnumerable<MediaRow> DeduplicateRows(
+        IReadOnlyCollection<HeroItem> hero,
+        IEnumerable<MediaRow> rows)
+    {
+        var seen = new HashSet<(string MediaType, long Id)>();
+        foreach (var item in hero)
+        {
+            seen.Add((item.Card.MediaType, item.Card.Id));
+        }
+
+        var result = new List<MediaRow>();
+        var rowIndex = 0;
+
+        foreach (var row in rows)
+        {
+            var isPriority = rowIndex < DedupPriorityRowCount;
+            var items = row.Items.ToList();
+
+            if (!isPriority)
+            {
+                items = items
+                    .Where(item => seen.Add((item.MediaType, item.Id)))
+                    .ToList();
+            }
+            else
+            {
+                foreach (var item in items)
+                {
+                    seen.Add((item.MediaType, item.Id));
+                }
+            }
+
+            if (items.Count > 0)
+            {
+                result.Add(new MediaRow(row.Id, row.Title, items));
+            }
+
+            rowIndex++;
+        }
+
+        return result;
+    }
 }
