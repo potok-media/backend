@@ -18,6 +18,7 @@ public class TmdbProxyController : ControllerBase
         _options = options.Value;
     }
 
+    [AllowAnonymous]
     [HttpGet("api/tmdb/{*path}")]
     public async Task<IActionResult> ProxyApi(string path)
     {
