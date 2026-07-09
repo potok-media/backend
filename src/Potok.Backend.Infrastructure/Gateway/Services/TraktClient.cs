@@ -1,7 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
-using Potok.Backend.Core.Models;
+using Potok.Backend.Core.Models.Gateway;
 using ILogger = Serilog.ILogger;
 
 namespace Potok.Backend.Infrastructure.Gateway.Services;

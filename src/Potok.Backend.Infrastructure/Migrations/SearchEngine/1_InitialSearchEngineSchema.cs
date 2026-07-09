@@ -67,9 +67,9 @@ public class InitialSearchEngineSchema : Migration
     public override void Down()
     {
         var schema = DbSchema.SearchEngineRaw;
-        Delete.Table("subscriptions").InSchema(schema);
-        Delete.Table("queries").InSchema(schema);
-        Delete.Table("torrents").InSchema(schema);
+        Delete.Table("subscriptions").IfExists().InSchema(schema);
+        Delete.Table("queries").IfExists().InSchema(schema);
+        Delete.Table("torrents").IfExists().InSchema(schema);
         Execute.Sql($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE;");
     }
 }

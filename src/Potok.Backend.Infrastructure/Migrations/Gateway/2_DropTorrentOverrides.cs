@@ -15,9 +15,13 @@ public class DropTorrentOverrides : Migration
 
     public override void Down()
     {
-        Create.Table("torrent_overrides").InSchema(DbSchema.GatewayRaw)
-            .WithColumn("hash").AsString().PrimaryKey()
-            .WithColumn("season").AsInt32().Nullable()
-            .WithColumn("episode_offset").AsInt32().Nullable();
+        var schema = DbSchema.GatewayRaw;
+        Execute.Sql($"""
+            CREATE TABLE IF NOT EXISTS "{schema}".torrent_overrides (
+                hash text NOT NULL PRIMARY KEY,
+                season integer NULL,
+                episode_offset integer NULL
+            );
+            """);
     }
 }

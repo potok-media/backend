@@ -11,22 +11,22 @@
   ![Image](https://img.shields.io/badge/ghcr.io-potok--media-181717?logo=docker&logoColor=white)
 </div>
 
-Server side of the **Potok** media service — three microservices behind a single API:
+Server side of the **Potok** media service — three deployable services:
 
-- **Gateway** (BFF, ASP.NET Core) — client entry point, auth, TMDB/Trakt proxy, orchestration.
-- **SearchEngine** (ASP.NET Core) — torrent search across trackers.
-- **TorrentGo** (Go) — BitTorrent streaming engine.
+- **Gateway** (BFF, ASP.NET Core) — client entry point: auth, sync, media (TMDB/Trakt), plugin bundler sidecar, CORS proxy for plugins.
+- **SearchEngine** (ASP.NET Core) — torrent search and overrides (for `torrents-plugin`).
+- **TorrentGo** (Go) — BitTorrent streaming engine (for `torrents-plugin`).
 
 Gateway and SearchEngine share one PostgreSQL (separate schemas); TorrentGo is stateless.
-Engine addresses are managed by an external plugin, not by env.
+The client talks to Gateway via `gatewayURL`; the torrents plugin calls SearchEngine and TorrentGo directly.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     Client["Web client"] --> GW["potok-gateway<br/>:5000"]
-    GW --> SE["potok-searchengine<br/>:6000"]
-    GW --> TG["potok-torrentgo<br/>:5282"]
+    Plugin["torrents-plugin"] --> SE["potok-searchengine<br/>:6000"]
+    Plugin --> TG["potok-torrentgo<br/>:5282"]
     GW --> DB[("PostgreSQL")]
     SE --> DB
 ```

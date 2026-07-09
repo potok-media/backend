@@ -4,8 +4,8 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using Potok.Backend.Core.Entities;
-using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Core.Entities.Gateway;
+using Potok.Backend.Core.Interfaces.Gateway;
 using Potok.Backend.Infrastructure.Configuration;
 
 namespace Potok.Backend.Gateway.Controllers;

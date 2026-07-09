@@ -1,0 +1,16 @@
+using System;
+using System.Threading.Tasks;
+using Potok.Backend.Core.Entities.Gateway;
+
+namespace Potok.Backend.Core.Interfaces.Gateway;
+
+public interface IUserRepository
+{
+    Task<User?> GetByIdAsync(Guid id);
+    Task<User?> GetByUsernameAsync(string username);
+    Task CreateAsync(User user);
+    Task UpdateSyncStrategyAsync(Guid userId, string strategy);
+    Task<UserTraktToken?> GetTraktTokenAsync(Guid userId);
+    Task SaveTraktTokenAsync(UserTraktToken token);
+    Task DeleteTraktTokenAsync(Guid userId);
+}

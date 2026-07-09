@@ -6,9 +6,9 @@ using Polly.CircuitBreaker;
 using Polly.Retry;
 using Polly.Timeout;
 using Potok.Backend.Core.Enums;
-using Potok.Backend.Core.Interfaces;
-using Potok.Backend.Core.Models.Details;
-using Potok.Backend.Core.Models.Options;
+using Potok.Backend.Core.Interfaces.Gateway;
+using Potok.Backend.Core.Models.SearchEngine.Details;
+using Potok.Backend.Core.Models.SearchEngine.Options;
 using Potok.Backend.Infrastructure.Http;
 using Serilog;
 

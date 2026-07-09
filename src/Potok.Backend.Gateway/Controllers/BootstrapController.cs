@@ -1,5 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
-using Potok.Backend.Core.Models;
+using Potok.Backend.Core.Models.Gateway;
 
 namespace Potok.Backend.Gateway.Controllers;
 

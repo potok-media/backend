@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.Extensions;
 using Microsoft.AspNetCore.HttpOverrides;
-using Potok.Backend.Core.Models.Options;
+using Potok.Backend.Core.Models.SearchEngine.Options;
 using Potok.Backend.Infrastructure.Configuration;
 using Potok.Backend.Infrastructure.Migrations.Configurations;
 using Potok.Backend.SearchEngine;
@@ -76,9 +76,9 @@ CultureInfo.CurrentCulture = new CultureInfo("ru-RU");
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 // --- Регистрация зависимостей ---
-builder.Services.AddSharedInfrastructure(builder.Configuration);
+builder.Services.AddCoreInfrastructure(builder.Configuration);
+builder.Services.AddSearchEngineServices(builder.Configuration);
 builder.Services.AddSearchEngineInfrastructure(builder.Configuration);
-builder.Services.AddSignalR();
 
 var app = builder.Build();
 

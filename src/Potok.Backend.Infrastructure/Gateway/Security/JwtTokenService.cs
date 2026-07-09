@@ -4,7 +4,7 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
-using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Core.Interfaces.Gateway;
 using Potok.Backend.Infrastructure.Configuration;
 
 namespace Potok.Backend.Infrastructure.Gateway.Security;

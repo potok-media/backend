@@ -1,7 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.SignalR;
-using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Core.Interfaces.Gateway;
 using Potok.Backend.Infrastructure.Gateway.Hubs;
 
 namespace Potok.Backend.Infrastructure.Gateway.Services;

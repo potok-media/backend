@@ -1,8 +1,7 @@
 using Microsoft.Extensions.Options;
-using Potok.Backend.Core.Interfaces;
-using Potok.Backend.Core.Models.Api;
-using Potok.Backend.Core.Models.Details;
-using Potok.Backend.Core.Models.Options;
+using Potok.Backend.Core.Models.SearchEngine.Api;
+using Potok.Backend.Core.Models.SearchEngine.Details;
+using Potok.Backend.Core.Models.SearchEngine.Options;
 using Potok.Backend.Core.Utils;
 using Potok.Backend.Infrastructure.Http;
 
@@ -38,7 +37,7 @@ public class SearchService : BaseSearchService, ISearchService
         _config = config.Value;
     }
 
-    public async Task<IReadOnlyCollection<TorrentDetails>> SearchTorrentsAsync(TorrentSearchRequest request)
+    public async Task<IReadOnlyCollection<TorrentDetails>> SearchTorrentsAsync(TorrentSearchQuery request)
     {
         var cacheKey = CacheKeyBuilder.Build("api", "v1.0", "torrents", 
             request.TmdbId?.ToString() ?? "null", 
@@ -61,12 +60,12 @@ public class SearchService : BaseSearchService, ISearchService
     }
 
     // satisfy interface for legacy v2 (can be empty or minimal)
-    public async Task<RootObject> SearchJackettAsync(TorrentSearchRequest request)
+    public async Task<RootObject> SearchJackettAsync(TorrentSearchQuery request)
     {
         return new RootObject { Results = new List<Result>(), Error = "Jackett API is disabled" };
     }
 
-    private async Task<List<TorrentDetails>> ExecuteUnifiedSearch(TorrentSearchRequest request)
+    private async Task<List<TorrentDetails>> ExecuteUnifiedSearch(TorrentSearchQuery request)
     {
         List<TorrentDetails> torrents = new();
 

@@ -1,6 +1,6 @@
-using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Core.Interfaces.Gateway;
 using Potok.Backend.Core.Mappers;
-using Potok.Backend.Core.Models;
+using Potok.Backend.Core.Models.Gateway;
 
 namespace Potok.Backend.Infrastructure.Gateway.Services;
 

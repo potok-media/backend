@@ -1,4 +1,4 @@
-using Potok.Backend.Core.Models.Options;
+using Potok.Backend.Core.Models.SearchEngine.Options;
 
 namespace Potok.Backend.Core.Enums;
 

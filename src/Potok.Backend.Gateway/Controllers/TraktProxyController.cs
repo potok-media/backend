@@ -2,8 +2,8 @@ using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using Potok.Backend.Core.Entities;
-using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Core.Entities.Gateway;
+using Potok.Backend.Core.Interfaces.Gateway;
 using Potok.Backend.Infrastructure.Configuration;
 using ILogger = Serilog.ILogger;
 

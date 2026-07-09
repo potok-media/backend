@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
-using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Core.Interfaces.Gateway;
 using Potok.Backend.Infrastructure.Configuration;
 
 namespace Potok.Backend.Infrastructure.Middlewares;

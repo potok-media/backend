@@ -1,4 +1,3 @@
-using Potok.Backend.Core.Interfaces;
 using Potok.Backend.Infrastructure.Configuration;
 using Potok.Backend.Infrastructure.Migrations.Configurations;
 using Serilog;
@@ -53,7 +52,8 @@ if (!string.IsNullOrEmpty(port))
 builder.Logging.ClearProviders();
 builder.Host.UseSerilog(Log.Logger, dispose: true);
 
-builder.Services.AddSharedInfrastructure(builder.Configuration);
+builder.Services.AddCoreInfrastructure(builder.Configuration);
+builder.Services.AddGatewayServices(builder.Configuration);
 builder.Services.AddGatewayInfrastructure(builder.Configuration);
 builder.Services.AddSignalR();
 
@@ -130,12 +130,6 @@ app.UseRouting();
 app.UseMiddleware<Potok.Backend.Infrastructure.Middlewares.UserContextMiddleware>();
 app.UseAuthorization();
 
-using (var scope = app.Services.CreateScope())
-{
-    var torrentRepo = scope.ServiceProvider.GetRequiredService<ITorrentRepository>();
-    await torrentRepo.EnsureDatabaseAsync();
-}
-
 app.Services.RunGatewayMigrations();
 
 using (var scope = app.Services.CreateScope())
@@ -147,7 +141,7 @@ using (var scope = app.Services.CreateScope())
     var existingAdmin = await userRepo.GetByUsernameAsync(gatewayOptions.AdminUsername);
     if (existingAdmin == null)
     {
-        var adminUser = new Potok.Backend.Core.Entities.User
+        var adminUser = new User
         {
             Id = Guid.NewGuid(),
             Username = gatewayOptions.AdminUsername,

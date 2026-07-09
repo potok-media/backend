@@ -1,7 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
-using Potok.Backend.Core.Interfaces;
-using Potok.Backend.Core.Models;
+using Potok.Backend.Core.Interfaces.Gateway;
+using Potok.Backend.Core.Models.Gateway;
 using ILogger = Serilog.ILogger;
 
 namespace Potok.Backend.Gateway.Controllers;

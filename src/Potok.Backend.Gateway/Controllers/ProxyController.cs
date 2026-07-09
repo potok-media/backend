@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Http;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Buffers;
+using Potok.Backend.Gateway.Security;
 
 namespace Potok.Backend.Gateway.Controllers;
 
@@ -40,10 +41,10 @@ public class ProxyController : ControllerBase
     [AcceptVerbs("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD")]
     public async Task Proxy([FromQuery] string url, [FromQuery] string? referer = null, [FromQuery] string? origin = null)
     {
-        if (string.IsNullOrEmpty(url))
+        if (!ProxyRequestGuard.TryValidate(url, out var targetUri, out var validationError))
         {
             Response.StatusCode = 400;
-            await Response.WriteAsync("Url parameter is required");
+            await Response.WriteAsync(validationError);
             return;
         }
 
@@ -72,9 +73,9 @@ public class ProxyController : ControllerBase
 
         try
         {
-            var client = _httpClientFactory.CreateClient("Default");
-            var targetUri = new Uri(url);
-            var request = new HttpRequestMessage(new HttpMethod(Request.Method), targetUri);
+            var client = _httpClientFactory.CreateClient("GatewayProxy");
+            var validatedUri = targetUri!;
+            var request = new HttpRequestMessage(new HttpMethod(Request.Method), validatedUri);
 
             // 2. Strict Header Splitting: Copy request headers (skip content headers to prevent exceptions)
             foreach (var header in Request.Headers)
@@ -100,7 +101,7 @@ public class ProxyController : ControllerBase
             }
             else if (!request.Headers.Contains("Referer"))
             {
-                request.Headers.Referrer = new Uri($"{targetUri.Scheme}://{targetUri.Host}/");
+                request.Headers.Referrer = new Uri($"{validatedUri.Scheme}://{validatedUri.Host}/");
             }
 
             if (!string.IsNullOrEmpty(origin))
@@ -170,7 +171,7 @@ public class ProxyController : ControllerBase
             {
                 // 6. Rewrite HLS playlists & Cache the rewritten bytes
                 var content = await response.Content.ReadAsStringAsync(HttpContext.RequestAborted);
-                var rewritten = RewriteM3u8(content, targetUri, referer, origin);
+                var rewritten = RewriteM3u8(content, validatedUri, referer, origin);
                 var bytes = System.Text.Encoding.UTF8.GetBytes(rewritten);
                 
                 var contentTypeStr = response.Content.Headers.ContentType?.ToString() ?? "application/x-mpegURL";

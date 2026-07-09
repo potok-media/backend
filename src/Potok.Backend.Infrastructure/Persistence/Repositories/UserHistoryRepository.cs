@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Dapper;
 using Npgsql;
-using Potok.Backend.Core.Entities;
-using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Core.Entities.Gateway;
+using Potok.Backend.Core.Interfaces.Gateway;
 using Potok.Backend.Infrastructure.Migrations.Configurations;
 
 namespace Potok.Backend.Infrastructure.Persistence.Repositories;

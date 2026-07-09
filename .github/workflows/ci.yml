@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore Potok.Backend.slnx
+
+      - name: Build and test
+        run: dotnet test Potok.Backend.slnx --no-restore -c Release
+
+      - name: Test Plugin Bundler
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Go test bundler
+        working-directory: src/Potok.Backend.PluginBundler
+        run: go test ./...

@@ -11,22 +11,22 @@
   ![Image](https://img.shields.io/badge/ghcr.io-potok--media-181717?logo=docker&logoColor=white)
 </div>
 
-Серверная часть медиа-сервиса **Potok** — три микросервиса за единым API:
+Серверная часть медиа-сервиса **Potok** — три deployable-сервиса:
 
-- **Gateway** (BFF, ASP.NET Core) — точка входа для клиентов, авторизация, прокси TMDB/Trakt, оркестрация.
-- **SearchEngine** (ASP.NET Core) — поиск торрентов по трекерам.
-- **TorrentGo** (Go) — стриминговый движок BitTorrent.
+- **Gateway** (BFF, ASP.NET Core) — точка входа для клиентов: auth, sync, media (TMDB/Trakt), plugin bundler sidecar, CORS-proxy для плагинов.
+- **SearchEngine** (ASP.NET Core) — поиск торрентов и overrides (для `torrents-plugin`).
+- **TorrentGo** (Go) — стриминговый движок BitTorrent (для `torrents-plugin`).
 
 Gateway и SearchEngine используют одну PostgreSQL (разные схемы); TorrentGo stateless.
-Адреса движков задаются внешним плагином, а не через env.
+Клиент ходит в Gateway по `gatewayURL`; плагин торрентов — напрямую в SearchEngine и TorrentGo.
 
 ## Архитектура
 
 ```mermaid
 flowchart LR
     Client["Веб-клиент"] --> GW["potok-gateway<br/>:5000"]
-    GW --> SE["potok-searchengine<br/>:6000"]
-    GW --> TG["potok-torrentgo<br/>:5282"]
+    Plugin["torrents-plugin"] --> SE["potok-searchengine<br/>:6000"]
+    Plugin --> TG["potok-torrentgo<br/>:5282"]
     GW --> DB[("PostgreSQL")]
     SE --> DB
 ```

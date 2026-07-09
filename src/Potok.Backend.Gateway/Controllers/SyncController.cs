@@ -2,8 +2,8 @@ using System;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
-using Potok.Backend.Core.Entities;
-using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Core.Entities.Gateway;
+using Potok.Backend.Core.Interfaces.Gateway;
 
 namespace Potok.Backend.Gateway.Controllers;
 

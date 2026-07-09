@@ -1,6 +1,6 @@
-using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Core.Interfaces.Gateway;
 using Potok.Backend.Core.Mappers;
-using Potok.Backend.Core.Models;
+using Potok.Backend.Core.Models.Gateway;
 
 namespace Potok.Backend.Infrastructure.Gateway.Services;
 
@@ -220,7 +220,7 @@ public class MediaOrchestrator : IMediaOrchestrator
             async () => {
                 try
                 {
-                    var httpClient = _httpClientFactory.CreateClient("Default");
+                    var httpClient = _httpClientFactory.CreateClient("GatewayOutbound");
                     httpClient.Timeout = TimeSpan.FromSeconds(5);
                     var token = "04941a9a3ca3ac16e2b4327347bbc1";
                     

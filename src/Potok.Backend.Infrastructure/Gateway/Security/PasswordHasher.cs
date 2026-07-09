@@ -1,5 +1,5 @@
 using Microsoft.AspNetCore.Identity;
-using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Core.Interfaces.Gateway;
 
 namespace Potok.Backend.Infrastructure.Gateway.Security;
 

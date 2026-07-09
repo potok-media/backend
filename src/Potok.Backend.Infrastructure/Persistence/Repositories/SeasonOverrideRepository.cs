@@ -1,8 +1,8 @@
 using System.Text.Json;
 using Dapper;
 using Npgsql;
-using Potok.Backend.Core.Interfaces;
-using Potok.Backend.Core.Models;
+using Potok.Backend.Core.Interfaces.Gateway;
+using Potok.Backend.Core.Models.Gateway;
 using Potok.Backend.Infrastructure.Migrations.Configurations;
 
 namespace Potok.Backend.Infrastructure.Persistence.Repositories;

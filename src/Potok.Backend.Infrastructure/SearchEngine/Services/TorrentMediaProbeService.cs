@@ -3,9 +3,9 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Potok.Backend.Core.Interfaces;
-using Potok.Backend.Core.Models.Options;
-using Potok.Backend.Core.Models.Tracks;
+using Potok.Backend.Core.Interfaces.Gateway;
+using Potok.Backend.Core.Models.SearchEngine.Options;
+using Potok.Backend.Core.Models.SearchEngine.Tracks;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services;
 

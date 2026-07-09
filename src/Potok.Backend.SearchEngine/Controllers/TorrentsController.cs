@@ -1,6 +1,4 @@
 using Microsoft.AspNetCore.Mvc;
-using Potok.Backend.Core.Interfaces;
-using Potok.Backend.Core.Models;
 
 namespace Potok.Backend.SearchEngine.Controllers;
 
@@ -18,7 +16,7 @@ public class TorrentsController : ControllerBase
     [HttpPost("search")]
     public async Task<ActionResult<TorrentSearchResponse>> Search([FromBody] TorrentSearchRequest request)
     {
-        var internalRequest = new Potok.Backend.Core.Models.Api.TorrentSearchRequest
+        var internalRequest = new TorrentSearchQuery
         {
             TmdbId = request.Id,
             Query = request.Query,

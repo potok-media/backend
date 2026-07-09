@@ -2,8 +2,8 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using Potok.Backend.Core.Interfaces;
-using Potok.Backend.Core.Models.Options;
+using Potok.Backend.Core.Interfaces.Gateway;
+using Potok.Backend.Core.Models.SearchEngine.Options;
 using Potok.Backend.Core.Utils;
 using Potok.Backend.Infrastructure.Http;
 

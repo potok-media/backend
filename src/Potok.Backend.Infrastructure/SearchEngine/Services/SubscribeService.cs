@@ -1,5 +1,5 @@
-using Potok.Backend.Core.Interfaces;
-using Potok.Backend.Core.Models.Database;
+using Potok.Backend.Core.Interfaces.Gateway;
+using Potok.Backend.Core.Models.SearchEngine.Database;
 using Potok.Backend.Core.Utils;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services;
@@ -55,7 +55,7 @@ public class SubscribeService : ISubscribeService
         return await _repository.ExistsAsync(tmdbId, uid, media);
     }
 
-    public async Task<IReadOnlyCollection<Core.Models.UserSubscriptionItem>> GetUserSubscriptionsAsync(string uid)
+    public async Task<IReadOnlyCollection<UserSubscriptionItem>> GetUserSubscriptionsAsync(string uid)
     {
         return await _queriesRepository.GetUserSubscriptionsAsync(uid);
     }

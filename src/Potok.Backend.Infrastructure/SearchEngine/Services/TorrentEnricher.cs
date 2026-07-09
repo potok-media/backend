@@ -1,7 +1,7 @@
 using System.Text.Json;
-using Potok.Backend.Core.Interfaces;
-using Potok.Backend.Core.Models;
-using Potok.Backend.Core.Models.Details;
+using Potok.Backend.Core.Interfaces.Gateway;
+using Potok.Backend.Core.Models.Gateway;
+using Potok.Backend.Core.Models.SearchEngine.Details;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services;
 

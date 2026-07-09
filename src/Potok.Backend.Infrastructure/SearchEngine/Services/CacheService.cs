@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
-using Potok.Backend.Core.Interfaces;
-using Potok.Backend.Core.Models.Options;
+using Potok.Backend.Core.Interfaces.Gateway;
+using Potok.Backend.Core.Models.SearchEngine.Options;
 
 namespace Potok.Backend.Infrastructure.SearchEngine.Services;
 

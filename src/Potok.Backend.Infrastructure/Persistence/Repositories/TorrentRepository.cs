@@ -3,10 +3,10 @@ using Dapper;
 using Microsoft.Extensions.Logging;
 using MonoTorrent;
 using Npgsql;
-using Potok.Backend.Core.Entities;
-using Potok.Backend.Core.Interfaces;
-using Potok.Backend.Core.Models.Details;
-using Potok.Backend.Core.Models.Tracks;
+using Potok.Backend.Core.Entities.Gateway;
+using Potok.Backend.Core.Interfaces.Gateway;
+using Potok.Backend.Core.Models.SearchEngine.Details;
+using Potok.Backend.Core.Models.SearchEngine.Tracks;
 using Potok.Backend.Infrastructure.Migrations.Configurations;
 
 namespace Potok.Backend.Infrastructure.Persistence.Repositories;
@@ -121,11 +121,5 @@ public class TorrentRepository : ITorrentRepository
     public async Task IncrementMediaProbeAttemptsAsync(string url)
     {
         // To be implemented later if needed
-    }
-    
-    public async Task EnsureDatabaseAsync()
-    {
-        // Migrations handle database creation
-        await Task.CompletedTask;
     }
 }

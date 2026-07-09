@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
-using Potok.Backend.Core.Models.Options;
+using Potok.Backend.Core.Models.SearchEngine.Options;
 
 namespace Potok.Backend.Infrastructure.Middlewares;
 

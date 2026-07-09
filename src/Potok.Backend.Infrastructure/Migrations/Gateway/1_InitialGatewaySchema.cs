@@ -63,11 +63,11 @@ public class InitialGatewaySchema : Migration
     public override void Down()
     {
         var schema = DbSchema.GatewayRaw;
-        Delete.Table("user_watchlist").InSchema(schema);
-        Delete.Table("user_favorites").InSchema(schema);
-        Delete.Table("user_history").InSchema(schema);
-        Delete.Table("user_trakt_tokens").InSchema(schema);
-        Delete.Table("users").InSchema(schema);
+        Delete.Table("user_watchlist").IfExists().InSchema(schema);
+        Delete.Table("user_favorites").IfExists().InSchema(schema);
+        Delete.Table("user_history").IfExists().InSchema(schema);
+        Delete.Table("user_trakt_tokens").IfExists().InSchema(schema);
+        Delete.Table("users").IfExists().InSchema(schema);
         Execute.Sql($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE;");
     }
 }

@@ -1,4 +1,4 @@
-using Potok.Backend.Core.Models;
+using Potok.Backend.Core.Models.Gateway;
 
 namespace Potok.Backend.Core.Mappers;
 

@@ -1,5 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
-using Potok.Backend.Core.Interfaces;
+using Potok.Backend.Core.Interfaces.Gateway;
 
 namespace Potok.Backend.SearchEngine.Controllers;
 
