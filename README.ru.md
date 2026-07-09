@@ -33,10 +33,22 @@ flowchart LR
 
 ## Быстрый старт (Docker)
 
+Создайте в одной папке `docker-compose.yml`, `.env` и (для торрентов) `config.yml` — [вики, установка](https://potok.rip/wiki). Затем:
+
 ```bash
-cp .env.example .env                              # заполните GATEWAY_TMDB_API_KEY и доступы к БД
-cp src/Potok.Backend.SearchEngine/config.yml .    # конфиг SearchEngine (обязателен) — настройте трекеры
 docker compose up -d --build
+```
+
+Минимальный `.env`:
+
+```env
+GATEWAY_PORT=5000
+GATEWAY_TMDB_API_KEY=ваш_ключ_tmdb
+GATEWAY_JWT_SECRET=change-me-in-production-32chars-min
+DB_HOST=db
+DB_PASSWORD=changeme
+SEARCH_ENGINE_PORT=6000
+TORRENTGO_PORT=5282
 ```
 
 Поднимутся все три сервиса и экземпляр PostgreSQL. База **обязательна**; чтобы использовать
@@ -60,6 +72,7 @@ services:
       - ConnectionStrings__DefaultConnection=Host=${DB_HOST:-db};Port=${DB_PORT:-5432};Database=${DB_NAME:-potok};Username=${DB_USER:-potok};Password=${DB_PASSWORD:-potok};Timeout=30;CommandTimeout=60;
       - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY}
       - Gateway__MultiUserMode=${GATEWAY_MULTI_USER_MODE:-false}
+      - Gateway__JwtSecret=${GATEWAY_JWT_SECRET:-default-fallback-gateway-jwt-secret-key-32-chars-long}
     depends_on:
       db:
         condition: service_healthy
@@ -138,118 +151,28 @@ volumes:
 Задаётся через `.env`. Строка подключения к БД собирается в `docker-compose.yml` из частей
 `DB_*`, поэтому отдельного `DATABASE_URL` держать в синхроне не нужно.
 
-| Переменная | Описание | По умолчанию |
-|---|---|---|
-| `GATEWAY_TMDB_API_KEY` | Ключ TMDB API (обязательно) | — |
-| `GATEWAY_MULTI_USER_MODE` | Разрешить саморегистрацию новых пользователей | `false` |
-| `DB_HOST` / `DB_PORT` | Хост/порт PostgreSQL (`db` = встроенный контейнер) | `db` / `5432` |
-| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Имя БД и доступы | `potok` / `potok` / — |
-| `GATEWAY_PORT` / `SEARCH_ENGINE_PORT` / `TORRENTGO_PORT` | Порты сервисов | `5000` / `6000` / `5282` |
+| Переменная | Куда попадает | Описание | По умолчанию |
+|---|---|---|---|
+| `GATEWAY_TMDB_API_KEY` | `Gateway__TmdbApiKey` | Ключ TMDB API (**обязательно**) | — |
+| `GATEWAY_MULTI_USER_MODE` | `Gateway__MultiUserMode` | Саморегистрация пользователей | `false` |
+| `GATEWAY_JWT_SECRET` | `Gateway__JwtSecret` | Секрет JWT (смените в продакшене) | смените в продакшене |
+| `DB_HOST` / `DB_PORT` | строка подключения | Хост/порт PostgreSQL (`db` = встроенный) | `db` / `5432` |
+| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | строка подключения + сервис `db` | Доступы к БД | `potok` / `potok` / — |
+| `GATEWAY_PORT` | `PORT` в gateway | Порт публикации на хосте | `5000` |
+| `SEARCH_ENGINE_PORT` | `PORT` в searchengine | Порт на хосте; укажите тот же URL в `searchEngineURL` плагина | `6000` |
+| `TORRENTGO_PORT` | `PORT` в torrentgo | Порт на хосте; укажите тот же URL в `torrentGoURL` плагина | `5282` |
+| `GPU_DEVICE` | `devices:` в compose | Проброс GPU для TorrentGo (**не** env-переменная процесса) | noop `/dev/null` |
+| `POTOK_DISABLE_HWACCEL` | env torrentgo (добавить вручную) | Принудительный софтверный транскод при `1` | выкл. |
+
+**Не через `.env`:** креды трекеров SearchEngine — в `config.yml` (монтируется как `config.local.yml`). Порт SearchEngine — `PORT` / `SEARCH_ENGINE_PORT`, не `config.yml`. URL плагина (`searchEngineURL`, `torrentGoURL`) задаются в potok-torrents, не в env Gateway.
 
 ### Конфиг SearchEngine (`config.yml`)
 
-У SearchEngine есть собственный YAML-конфиг — **без него движок не стартует**. Compose монтирует
-хостовый `./config.yml` (рядом с `docker-compose.yml`) в контейнер как `config.local.yml`, так что
-его можно править на хосте без пересборки. В нём настраиваются сервер, объединение результатов,
-кэш, периодический refresh, ffprobe и **трекеры** (какие искать, обход популярного и креды для
-тех трекеров, где они нужны).
+SearchEngine нужен `./config.yml` рядом с `docker-compose.yml` (монтируется как `config.local.yml`).
+Создайте на хосте и заполните трекеры — копировать из репозитория не обязательно.
 
-Возьмите образец за основу:
-
-```bash
-cp src/Potok.Backend.SearchEngine/config.yml ./config.yml   # затем настройте трекеры/креды
-```
-
-<details>
-<summary><code>config.yml</code> (образец SearchEngine — креды пустые)</summary>
-
-```yaml
-##### настройка сервера
-listen-ip: any
-api-key: ''
-web: true
-
-##### настройка выдачи
-
-# если у раздач одинаковый infohash, считаем это один торрент; объединяем их метаданные (сид/личи, размеры, названия, ссылки) в одну итоговую запись.
-merge-duplicates: true
-
-# дополнительно схлопывает те же дубликаты, когда отличаются лишь номер/суффикс в названии (Release, Release (1), Release-2), если infohash совпадает; метаданные так же объединяются.
-# работает для сериалов/аниме и похожего контента
-merge-num-duplicates: true
-
-cache:
-  enable: true        # включение сохранения данных в кеш
-  expiry: 15          # срок жизни данных в кеше (мин)
-  auth-expiry: 1      # срок жизни аутентификационных данных в кеше (дни)
-
-refresh:
-  enable: true        # Включить обновление данных торрентов
-  timeout: 1440         # Интервал запуска сервиса (мин)
-  older-than-min: 180  # Обновлять торренты старше 60 минут
-  limit: 50           # Лимит торрентов за проход
-
-# ffprobe/языки через TorrServer
-ffprobe:
-  enable: true
-  timeout: 60
-  tsuri: ''
-  batch-size: 20 # кол-во торрентов для обработки за раз
-  attempts: 3 # максимальное кол-во попыток получения ffprobe для одного торрента
-  authorization:
-    login: ''
-    password: ''
-
-##### настройка трекеров
-
-rutracker:
-  enable-search: true
-
-  # Обновление популярных раздач по категориям
-  popular:
-    enable: false # включить/выключить
-    timeout: 600 # задержка в минутах
-    max-pages: 3 # глубина обхода в каждой категории
-    categories: # список категорий для парсинга (например: [549, 22, 1666])
-      [ 1106, 1105, 2491, 1389 ]
-
-  authorization:
-    login: ''
-    password: ''
-
-animelayer:
-  enable-search: true
-  authorization:
-    login: ''
-    password: ''
-
-nnmclub:
-  enable-search: true
-
-rutor:
-  enable-search: true
-
-aniliberty:
-  enable-search: true
-
-kinozal:
-  enable-search: true
-
-  authorization:
-    login: ''
-    password: ''
-
-megapeer:
-  enable-search: true
-
-proxy:
-  list:
-    - url: ''
-      username: ''
-      password: ''
-```
-
-</details>
+Подробно: [SearchEngine и TorrentGo](https://potok.rip/wiki) (раздел в сайдбаре вики). Образец структуры:
+[`src/Potok.Backend.SearchEngine/config.yml`](src/Potok.Backend.SearchEngine/config.yml).
 
 > [!NOTE]
 > За NAT/Tailscale без проброса портов оставьте входящий UDP-порт TorrentGo закомментированным —

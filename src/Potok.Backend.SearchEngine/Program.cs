@@ -62,13 +62,17 @@ Log.Logger = new LoggerConfiguration()
 
 var builder = WebApplication.CreateBuilder(args);
 
+var port = Environment.GetEnvironmentVariable("PORT");
+if (!string.IsNullOrEmpty(port))
+{
+    builder.WebHost.UseUrls($"http://*:{port}");
+}
+
 builder.Logging.ClearProviders();
 builder.Host.UseSerilog(Log.Logger, dispose: true);
 
-// 1. Добавляем файл в общую конфигурацию приложения
+// Tracker config (config.yml mounted as config.local.yml in Docker)
 builder.Configuration.AddYamlFile("config.local.yml", false, true);
-
-// 2. Настраиваем Kestrel
 
 
 // --- Глобальные настройки ---

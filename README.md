@@ -33,10 +33,22 @@ flowchart LR
 
 ## Quick start (Docker)
 
+Create `docker-compose.yml`, `.env`, and (for torrents) `config.yml` in one folder — see [wiki install guide](https://potok.rip/wiki). Then:
+
 ```bash
-cp .env.example .env                              # fill GATEWAY_TMDB_API_KEY and DB credentials
-cp src/Potok.Backend.SearchEngine/config.yml .    # SearchEngine config (required) — edit trackers
 docker compose up -d --build
+```
+
+Minimal `.env`:
+
+```env
+GATEWAY_PORT=5000
+GATEWAY_TMDB_API_KEY=your_tmdb_key
+GATEWAY_JWT_SECRET=change-me-in-production-32chars-min
+DB_HOST=db
+DB_PASSWORD=changeme
+SEARCH_ENGINE_PORT=6000
+TORRENTGO_PORT=5282
 ```
 
 This brings up all three services and a PostgreSQL instance. PostgreSQL is **required**; to
@@ -61,6 +73,7 @@ services:
       - ConnectionStrings__DefaultConnection=Host=${DB_HOST:-db};Port=${DB_PORT:-5432};Database=${DB_NAME:-potok};Username=${DB_USER:-potok};Password=${DB_PASSWORD:-potok};Timeout=30;CommandTimeout=60;
       - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY}
       - Gateway__MultiUserMode=${GATEWAY_MULTI_USER_MODE:-false}
+      - Gateway__JwtSecret=${GATEWAY_JWT_SECRET:-default-fallback-gateway-jwt-secret-key-32-chars-long}
     depends_on:
       db:
         condition: service_healthy
@@ -140,117 +153,28 @@ volumes:
 Set via `.env`. The DB connection string is assembled in `docker-compose.yml` from the
 `DB_*` parts, so there is no separate `DATABASE_URL` to keep in sync.
 
-| Variable | Description | Default |
-|---|---|---|
-| `GATEWAY_TMDB_API_KEY` | TMDB API key (required) | — |
-| `GATEWAY_MULTI_USER_MODE` | Allow self-registration of new users | `false` |
-| `DB_HOST` / `DB_PORT` | PostgreSQL host/port (`db` = bundled container) | `db` / `5432` |
-| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Database name and credentials | `potok` / `potok` / — |
-| `GATEWAY_PORT` / `SEARCH_ENGINE_PORT` / `TORRENTGO_PORT` | Service ports | `5000` / `6000` / `5282` |
+| Variable | Maps to / used by | Description | Default |
+|---|---|---|---|
+| `GATEWAY_TMDB_API_KEY` | `Gateway__TmdbApiKey` | TMDB API key (**required**) | — |
+| `GATEWAY_MULTI_USER_MODE` | `Gateway__MultiUserMode` | Allow self-registration | `false` |
+| `GATEWAY_JWT_SECRET` | `Gateway__JwtSecret` | JWT signing secret (change in production) | change in production |
+| `DB_HOST` / `DB_PORT` | connection string | PostgreSQL host/port (`db` = bundled) | `db` / `5432` |
+| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | connection string + `db` service | Database credentials | `potok` / `potok` / — |
+| `GATEWAY_PORT` | `PORT` in gateway | Host publish port | `5000` |
+| `SEARCH_ENGINE_PORT` | `PORT` in searchengine | Host publish port; set plugin `searchEngineURL` to match | `6000` |
+| `TORRENTGO_PORT` | `PORT` in torrentgo | Host publish port; set plugin `torrentGoURL` to match | `5282` |
+| `GPU_DEVICE` | compose `devices:` | GPU passthrough for TorrentGo (**not** a process env var) | `/dev/null` noop |
+| `POTOK_DISABLE_HWACCEL` | TorrentGo env (add manually) | Force software transcoding when set to `1` | off |
+
+**Not configured via `.env`:** SearchEngine tracker credentials — use `config.yml` (mounted as `config.local.yml`). SearchEngine listen port is `PORT` / `SEARCH_ENGINE_PORT`, not `config.yml`. Plugin URLs (`searchEngineURL`, `torrentGoURL`) are set in the potok-torrents plugin, not in Gateway env.
 
 ### SearchEngine config (`config.yml`)
 
-SearchEngine also needs its own YAML config — **it won't start without it**. The compose mounts
-`./config.yml` (next to `docker-compose.yml`) into the container as `config.local.yml`, so you
-can edit it on the host without rebuilding. It configures the server, result merging, cache,
-periodic refresh, ffprobe, and the **trackers** (which to search, popularity crawling, and
-per-tracker credentials where required).
+SearchEngine needs `./config.yml` next to `docker-compose.yml` (mounted as `config.local.yml`).
+Create it on the host and fill in trackers — no copy step from the repo.
 
-Grab the sample to start from:
-
-```bash
-cp src/Potok.Backend.SearchEngine/config.yml ./config.yml   # then edit trackers/credentials
-```
-
-<details>
-<summary><code>config.yml</code> (SearchEngine sample — empty credentials)</summary>
-
-```yaml
-##### Server
-listen-ip: any
-api-key: ''
-web: true
-
-##### Result output
-
-# Same infohash → treat as one torrent; merge metadata (seeders/leechers, sizes, names, links).
-merge-duplicates: true
-
-# Also collapse such duplicates when only a number/suffix differs (Release, Release (1),
-# Release-2) and the infohash matches. Useful for TV shows / anime.
-merge-num-duplicates: true
-
-cache:
-  enable: true        # cache fetched data
-  expiry: 15          # cache TTL (min)
-  auth-expiry: 1      # auth data TTL (days)
-
-refresh:
-  enable: true        # periodically refresh torrent data
-  timeout: 1440       # run interval (min)
-  older-than-min: 180 # refresh torrents older than this (min)
-  limit: 50           # torrents per pass
-
-# ffprobe / audio languages via TorrServer
-ffprobe:
-  enable: true
-  timeout: 60
-  tsuri: ''
-  batch-size: 20      # torrents processed per batch
-  attempts: 3         # max ffprobe attempts per torrent
-  authorization:
-    login: ''
-    password: ''
-
-##### Trackers
-
-rutracker:
-  enable-search: true
-
-  # Crawl popular releases by category
-  popular:
-    enable: false     # on/off
-    timeout: 600      # delay (min)
-    max-pages: 3      # crawl depth per category
-    categories:       # categories to parse (e.g. [549, 22, 1666])
-      [ 1106, 1105, 2491, 1389 ]
-
-  authorization:
-    login: ''
-    password: ''
-
-animelayer:
-  enable-search: true
-  authorization:
-    login: ''
-    password: ''
-
-nnmclub:
-  enable-search: true
-
-rutor:
-  enable-search: true
-
-aniliberty:
-  enable-search: true
-
-kinozal:
-  enable-search: true
-  authorization:
-    login: ''
-    password: ''
-
-megapeer:
-  enable-search: true
-
-proxy:
-  list:
-    - url: ''
-      username: ''
-      password: ''
-```
-
-</details>
+Full guide: [SearchEngine & TorrentGo](https://potok.rip/wiki) (wiki sidebar). Sample structure:
+[`src/Potok.Backend.SearchEngine/config.yml`](src/Potok.Backend.SearchEngine/config.yml).
 
 > [!NOTE]
 > Behind NAT/Tailscale without port forwarding, leave TorrentGo's inbound UDP port commented
