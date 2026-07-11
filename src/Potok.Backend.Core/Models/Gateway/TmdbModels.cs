@@ -131,7 +131,10 @@ public record TmdbMultiSearchResult(
     [property: JsonPropertyName("backdrop_path")] string? BackdropPath,
     [property: JsonPropertyName("vote_average")] double VoteAverage,
     [property: JsonPropertyName("release_date")] string? ReleaseDate,
-    [property: JsonPropertyName("first_air_date")] string? FirstAirDate
+    [property: JsonPropertyName("first_air_date")] string? FirstAirDate,
+    [property: JsonPropertyName("original_language")] string? OriginalLanguage = null,
+    [property: JsonPropertyName("origin_country")] List<string>? OriginCountry = null,
+    [property: JsonPropertyName("genre_ids")] List<int>? GenreIds = null
 );
 
 public record TmdbPagedResponse<T>(

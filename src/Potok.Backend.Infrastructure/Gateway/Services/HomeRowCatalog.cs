@@ -17,7 +17,6 @@ public static class HomeRowCatalog
         new("genre.movie.27", "Ночной сеанс", "discover/movie?with_genres=27&sort_by=popularity.desc", "movie"),
         new("movie.upcoming", "Скоро в кино", "movie/upcoming", "movie"),
         new("tv.top-rated", "Лучшие сериалы", "tv/top_rated", "tv"),
-        new("discover.anime", "Аниме", "discover/tv?with_genres=16&with_origin_country=JP&sort_by=popularity.desc", "tv"),
         new("movie.short-runtime", "Один вечер — один фильм", "discover/movie?with_runtime.lte=100&sort_by=popularity.desc", "movie"),
     ];
 

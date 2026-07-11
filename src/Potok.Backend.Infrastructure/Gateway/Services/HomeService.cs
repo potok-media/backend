@@ -7,6 +7,40 @@ namespace Potok.Backend.Infrastructure.Gateway.Services;
 public class HomeService : IHomeService
 {
     private const int DedupPriorityRowCount = 3;
+    private const int RowTargetCount = 10;  // every row must show exactly this many cards
+    private const int RowBuffer = 24;       // overfetch target after filtering — headroom for dedup
+    private const int MaxPagesPerRow = 3;   // cap TMDB pages we'll pull to reach the buffer
+
+    // Keep the home feed to Western content: drop anime and Korean/Chinese/Indian/other Asian titles by their
+    // original language or origin country (TMDB discover has no "exclude language", so we filter the response).
+    private static readonly HashSet<string> BlockedLanguages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ja", // Japanese (anime + J-dramas)
+        "ko", // Korean
+        "zh", "cn", // Chinese / Cantonese
+        "hi", "ta", "te", "ml", "kn", "bn", "mr", "pa", // Indian languages
+        "th", // Thai
+    };
+
+    private static readonly HashSet<string> BlockedCountries = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "JP", "KR", "CN", "HK", "TW", "IN", "TH",
+    };
+
+    private static bool IsAllowed(TmdbMultiSearchResult item)
+    {
+        if (item.OriginalLanguage != null && BlockedLanguages.Contains(item.OriginalLanguage))
+        {
+            return false;
+        }
+
+        if (item.OriginCountry != null && item.OriginCountry.Any(c => c != null && BlockedCountries.Contains(c)))
+        {
+            return false;
+        }
+
+        return true;
+    }
 
     private readonly TmdbClient _tmdbClient;
 
@@ -27,10 +61,21 @@ public class HomeService : IHomeService
         {
             try
             {
-                var payload = await _tmdbClient.GetAsync<TmdbPagedResponse<TmdbMultiSearchResult>>(def.Path);
-                if (payload?.Results == null) return null;
+                // Pull pages until we have enough ALLOWED items to survive filtering + dedup and still hit 10.
+                var collected = new List<TmdbMultiSearchResult>();
+                for (var page = 1; page <= MaxPagesPerRow && collected.Count < RowBuffer; page++)
+                {
+                    var url = def.Path + (def.Path.Contains('?') ? "&" : "?") + "page=" + page;
+                    var payload = await _tmdbClient.GetAsync<TmdbPagedResponse<TmdbMultiSearchResult>>(url);
+                    if (payload?.Results == null) break;
 
-                var items = payload.Results
+                    collected.AddRange(payload.Results.Where(IsAllowed));
+                    if (page >= payload.TotalPages) break;
+                }
+
+                if (collected.Count == 0) return null;
+
+                var items = collected
                     .Select(item => MediaMapper.MapToMediaCard(item with { MediaType = def.MediaType }, baseUrl, posterSize, backdropSize));
 
                 return new MediaRow(def.Id, def.Title, items);
@@ -49,7 +94,7 @@ public class HomeService : IHomeService
                 var trending = await _tmdbClient.GetAsync<TmdbPagedResponse<TmdbMultiSearchResult>>("trending/all/week");
                 if (trending?.Results == null) return Enumerable.Empty<HeroItem>();
 
-                var heroRawItems = trending.Results.Take(10).ToList();
+                var heroRawItems = trending.Results.Where(IsAllowed).Take(10).ToList();
 
                 var heroItemsTasks = heroRawItems.Select(async item =>
                 {
@@ -112,28 +157,27 @@ public class HomeService : IHomeService
         foreach (var row in rows)
         {
             var isPriority = rowIndex < DedupPriorityRowCount;
-            var items = row.Items.ToList();
-
-            if (!isPriority)
-            {
-                items = items
-                    .Where(item => seen.Add((item.MediaType, item.Id)))
-                    .ToList();
-            }
-            else
-            {
-                foreach (var item in items)
-                {
-                    seen.Add((item.MediaType, item.Id));
-                }
-            }
-
-            if (items.Count > 0)
-            {
-                result.Add(new MediaRow(row.Id, row.Title, items));
-            }
-
             rowIndex++;
+
+            // Priority rows may overlap the hero/each other; others drop anything already shown above.
+            var candidates = isPriority
+                ? row.Items
+                : row.Items.Where(item => !seen.Contains((item.MediaType, item.Id)));
+
+            var items = candidates.Take(RowTargetCount).ToList();
+
+            // Hard rule: a row is shown only if it can fill exactly RowTargetCount cards — otherwise hide it.
+            if (items.Count < RowTargetCount)
+            {
+                continue;
+            }
+
+            foreach (var item in items)
+            {
+                seen.Add((item.MediaType, item.Id));
+            }
+
+            result.Add(new MediaRow(row.Id, row.Title, items));
         }
 
         return result;
