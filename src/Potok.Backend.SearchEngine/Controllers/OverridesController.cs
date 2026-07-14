@@ -22,7 +22,8 @@ public class OverridesController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(hash)) return BadRequest("hash is required");
         var map = await _repo.GetAsync(hash.ToLower());
-        return Ok(new TorrentOverrideMap(hash.ToLower(), map));
+        var fileMap = await _repo.GetFileMapAsync(hash.ToLower());
+        return Ok(new TorrentOverrideMap(hash.ToLower(), map, fileMap));
     }
 
     // Upsert one source-season's mapping. SourceSeason == null → the sentinel bucket "_" (files with no season).
@@ -45,6 +46,28 @@ public class OverridesController : ControllerBase
         var key = sourceSeason?.ToString() ?? "_";
         var map = await _repo.RemoveSeasonAsync(hash.ToLower(), key);
         return Ok(new { success = true, seasonMap = map });
+    }
+
+    // Phase 2: upsert ONE file's override (anchor/pin). Keyed by the torrent file id.
+    [HttpPost("{hash}/file")]
+    public async Task<IActionResult> UpsertFile(string hash, [FromBody] UpsertFileOverrideRequest body)
+    {
+        if (string.IsNullOrWhiteSpace(hash)) return BadRequest("hash is required");
+        if (body == null || string.IsNullOrWhiteSpace(body.FileId)) return BadRequest("fileId is required");
+        var mode = body.Mode == "pin" ? "pin" : "anchor"; // only two valid modes; default to anchor
+        var fileMap = await _repo.UpsertFileAsync(hash.ToLower(), body.FileId, new FileOverrideEntry(body.Season, body.Episode, mode));
+        return Ok(new { success = true, fileMap });
+    }
+
+    // Reset ONE file's override (delete the entry → that file falls back to season_map / auto-parse). POST (not
+    // DELETE) because the service's CORS allows POST/GET only.
+    [HttpPost("{hash}/file/remove")]
+    public async Task<IActionResult> RemoveFile(string hash, string fileId)
+    {
+        if (string.IsNullOrWhiteSpace(hash)) return BadRequest("hash is required");
+        if (string.IsNullOrWhiteSpace(fileId)) return BadRequest("fileId is required");
+        var fileMap = await _repo.RemoveFileAsync(hash.ToLower(), fileId);
+        return Ok(new { success = true, fileMap });
     }
 
     // Replace the whole map (e.g. clear-all).

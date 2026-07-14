@@ -80,9 +80,64 @@ public class SeasonOverrideRepository : ISeasonOverrideRepository
         await connection.ExecuteAsync(sql, new { Hash = cleanHash, Map = JsonSerializer.Serialize(map, JsonOptions) });
     }
 
+    // ---- Phase 2: per-file overrides (file_map jsonb on the same row) ----
+
+    public async Task<Dictionary<string, FileOverrideEntry>> GetFileMapAsync(string hash)
+    {
+        var cleanHash = hash?.ToLower() ?? string.Empty;
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        var sql = $@"SELECT file_map FROM {Schema}.torrent_overrides WHERE hash = @Hash";
+        var json = await connection.QuerySingleOrDefaultAsync<string>(sql, new { Hash = cleanHash });
+        return DeserializeFiles(json);
+    }
+
+    public async Task<Dictionary<string, FileOverrideEntry>> UpsertFileAsync(string hash, string fileId, FileOverrideEntry entry)
+    {
+        var cleanHash = hash?.ToLower() ?? string.Empty;
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        // Patch ONE file id under file_map (mirrors UpsertSeasonAsync). On a fresh row season_map falls back to
+        // its column default '{}'. ARRAY[@Key] is a bound text[] path so an arbitrary file id binds safely.
+        var sql = $@"
+            INSERT INTO {Schema}.torrent_overrides (hash, file_map, updated_at)
+            VALUES (@Hash, jsonb_build_object(@Key, @Entry::jsonb), now())
+            ON CONFLICT (hash) DO UPDATE SET
+                file_map = jsonb_set(COALESCE({Schema}.torrent_overrides.file_map, '{{}}'::jsonb), ARRAY[@Key], @Entry::jsonb),
+                updated_at = now()
+            RETURNING file_map";
+        var json = await connection.ExecuteScalarAsync<string>(sql, new
+        {
+            Hash = cleanHash,
+            Key = fileId,
+            Entry = JsonSerializer.Serialize(entry, JsonOptions)
+        });
+        return DeserializeFiles(json);
+    }
+
+    public async Task<Dictionary<string, FileOverrideEntry>> RemoveFileAsync(string hash, string fileId)
+    {
+        var cleanHash = hash?.ToLower() ?? string.Empty;
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        var sql = $@"
+            UPDATE {Schema}.torrent_overrides
+            SET file_map = file_map - @Key, updated_at = now()
+            WHERE hash = @Hash
+            RETURNING file_map";
+        var json = await connection.ExecuteScalarAsync<string>(sql, new { Hash = cleanHash, Key = fileId });
+        return DeserializeFiles(json);
+    }
+
     private static Dictionary<string, SeasonOverrideEntry> Deserialize(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return new();
         return JsonSerializer.Deserialize<Dictionary<string, SeasonOverrideEntry>>(json, JsonOptions) ?? new();
+    }
+
+    private static Dictionary<string, FileOverrideEntry> DeserializeFiles(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        return JsonSerializer.Deserialize<Dictionary<string, FileOverrideEntry>>(json, JsonOptions) ?? new();
     }
 }

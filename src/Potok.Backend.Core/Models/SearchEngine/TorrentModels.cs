@@ -79,6 +79,16 @@ public record TorrentStreamResponse(string? StreamUrl);
 // season to a TMDB (Season, Offset): displayedEpisode = parsedEpisode + Offset.
 public record SeasonOverrideEntry(int Season, int Offset);
 
-public record TorrentOverrideMap(string Hash, Dictionary<string, SeasonOverrideEntry> SeasonMap);
+// Per-FILE override (phase 2). Mode "anchor" = this file starts a renumbered run at (Season, Episode) and the
+// following files increment; "pin" = this one file is fixed at (Season, Episode) and does not shift its
+// neighbours (used for specials / one-offs). Keyed by the torrent file id.
+public record FileOverrideEntry(int Season, int Episode, string Mode);
+
+public record TorrentOverrideMap(
+    string Hash,
+    Dictionary<string, SeasonOverrideEntry> SeasonMap,
+    Dictionary<string, FileOverrideEntry>? FileMap = null);
 
 public record UpsertSeasonOverrideRequest(int? SourceSeason, int TargetSeason, int Offset);
+
+public record UpsertFileOverrideRequest(string FileId, int Season, int Episode, string Mode);
