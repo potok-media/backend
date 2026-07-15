@@ -55,7 +55,10 @@ builder.Host.UseSerilog(Log.Logger, dispose: true);
 builder.Services.AddCoreInfrastructure(builder.Configuration);
 builder.Services.AddGatewayServices(builder.Configuration);
 builder.Services.AddGatewayInfrastructure(builder.Configuration);
-builder.Services.AddSignalR();
+builder.Services.AddSignalR(options =>
+{
+   options.DisableImplicitFromServicesParameters = true;
+});
 
 // Internal plugin-bundler sidecar: supervised child process + loopback-only client.
 // Hidden, hardcoded, never exposed — see Services/PluginBundlerConstants.cs.
@@ -156,5 +159,6 @@ using (var scope = app.Services.CreateScope())
 app.MapGet("/health", () => Results.Ok()).AllowAnonymous();
 app.MapControllers();
 app.MapHub<Potok.Backend.Infrastructure.Gateway.Hubs.EventsHub>("/api/events").AllowAnonymous();
+app.MapHub<Potok.Backend.Infrastructure.Gateway.Hubs.WatchTogetherHub>("/api/watch-together").AllowAnonymous();
 
 app.Run();
