@@ -23,7 +23,7 @@ public class UserRepository : IUserRepository
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync();
-        var sql = $"SELECT id, username, password_hash as PasswordHash, sync_strategy as SyncStrategy, created_at as CreatedAt FROM {Schema}.users WHERE id = @Id";
+        var sql = $"SELECT id, username, password_hash as PasswordHash, sync_strategy as SyncStrategy, created_at as CreatedAt, telegram_id as TelegramId, telegram_username as TelegramUsername FROM {Schema}.users WHERE id = @Id";
         return await connection.QuerySingleOrDefaultAsync<User>(sql, new { Id = id });
     }
 
@@ -31,8 +31,16 @@ public class UserRepository : IUserRepository
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync();
-        var sql = $"SELECT id, username, password_hash as PasswordHash, sync_strategy as SyncStrategy, created_at as CreatedAt FROM {Schema}.users WHERE LOWER(username) = LOWER(@Username)";
+        var sql = $"SELECT id, username, password_hash as PasswordHash, sync_strategy as SyncStrategy, created_at as CreatedAt, telegram_id as TelegramId, telegram_username as TelegramUsername FROM {Schema}.users WHERE LOWER(username) = LOWER(@Username)";
         return await connection.QuerySingleOrDefaultAsync<User>(sql, new { Username = username });
+    }
+
+    public async Task<User?> GetByTelegramIdAsync(long telegramId)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        var sql = $"SELECT id, username, password_hash as PasswordHash, sync_strategy as SyncStrategy, created_at as CreatedAt, telegram_id as TelegramId, telegram_username as TelegramUsername FROM {Schema}.users WHERE telegram_id = @TelegramId";
+        return await connection.QuerySingleOrDefaultAsync<User>(sql, new { TelegramId = telegramId });
     }
 
     public async Task CreateAsync(User user)
@@ -40,8 +48,8 @@ public class UserRepository : IUserRepository
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync();
         var sql = $@"
-            INSERT INTO {Schema}.users (id, username, password_hash, sync_strategy, created_at)
-            VALUES (@Id, @Username, @PasswordHash, @SyncStrategy, @CreatedAt)";
+            INSERT INTO {Schema}.users (id, username, password_hash, sync_strategy, created_at, telegram_id, telegram_username)
+            VALUES (@Id, @Username, @PasswordHash, @SyncStrategy, @CreatedAt, @TelegramId, @TelegramUsername)";
         await connection.ExecuteAsync(sql, user);
     }
 
@@ -51,6 +59,38 @@ public class UserRepository : IUserRepository
         await connection.OpenAsync();
         var sql = $"UPDATE {Schema}.users SET sync_strategy = @Strategy WHERE id = @Id";
         await connection.ExecuteAsync(sql, new { Id = userId, Strategy = strategy });
+    }
+
+    public async Task UpdatePasswordAsync(Guid userId, string passwordHash)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        var sql = $"UPDATE {Schema}.users SET password_hash = @PasswordHash WHERE id = @Id";
+        await connection.ExecuteAsync(sql, new { Id = userId, PasswordHash = passwordHash });
+    }
+
+    public async Task SetCredentialsAsync(Guid userId, string username, string passwordHash)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        var sql = $"UPDATE {Schema}.users SET username = @Username, password_hash = @PasswordHash WHERE id = @Id";
+        await connection.ExecuteAsync(sql, new { Id = userId, Username = username, PasswordHash = passwordHash });
+    }
+
+    public async Task LinkTelegramAsync(Guid userId, long telegramId, string? telegramUsername)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        var sql = $"UPDATE {Schema}.users SET telegram_id = @TelegramId, telegram_username = @TelegramUsername WHERE id = @Id";
+        await connection.ExecuteAsync(sql, new { Id = userId, TelegramId = telegramId, TelegramUsername = telegramUsername });
+    }
+
+    public async Task UnlinkTelegramAsync(Guid userId)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        var sql = $"UPDATE {Schema}.users SET telegram_id = NULL, telegram_username = NULL WHERE id = @Id";
+        await connection.ExecuteAsync(sql, new { Id = userId });
     }
 
     public async Task<UserTraktToken?> GetTraktTokenAsync(Guid userId)

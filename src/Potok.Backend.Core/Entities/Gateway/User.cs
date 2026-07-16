@@ -9,4 +9,6 @@ public class User
     public string? PasswordHash { get; set; }
     public string SyncStrategy { get; set; } = "none";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public long? TelegramId { get; set; }
+    public string? TelegramUsername { get; set; }
 }

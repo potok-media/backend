@@ -74,6 +74,9 @@ services:
       - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY}
       - Gateway__MultiUserMode=${GATEWAY_MULTI_USER_MODE:-false}
       - Gateway__JwtSecret=${GATEWAY_JWT_SECRET:-default-fallback-gateway-jwt-secret-key-32-chars-long}
+      # Telegram login: set both to enable auth/registration via the Telegram Login Widget.
+      - Gateway__TelegramBotToken=${GATEWAY_TELEGRAM_BOT_TOKEN:-}
+      - Gateway__TelegramBotUsername=${GATEWAY_TELEGRAM_BOT_USERNAME:-}
     depends_on:
       db:
         condition: service_healthy
@@ -158,6 +161,8 @@ Set via `.env`. The DB connection string is assembled in `docker-compose.yml` fr
 | `GATEWAY_TMDB_API_KEY` | `Gateway__TmdbApiKey` | TMDB API key (**required**) | — |
 | `GATEWAY_MULTI_USER_MODE` | `Gateway__MultiUserMode` | Allow self-registration | `false` |
 | `GATEWAY_JWT_SECRET` | `Gateway__JwtSecret` | JWT signing secret (change in production) | change in production |
+| `GATEWAY_TELEGRAM_BOT_TOKEN` | `Gateway__TelegramBotToken` | Telegram bot token; enables Telegram login when set with the username below | — |
+| `GATEWAY_TELEGRAM_BOT_USERNAME` | `Gateway__TelegramBotUsername` | Telegram bot username (no `@`) for the login widget | — |
 | `DB_HOST` / `DB_PORT` | connection string | PostgreSQL host/port (`db` = bundled) | `db` / `5432` |
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` | connection string + `db` service | Database credentials | `potok` / `potok` / — |
 | `GATEWAY_PORT` | `PORT` in gateway | Host publish port | `5000` |

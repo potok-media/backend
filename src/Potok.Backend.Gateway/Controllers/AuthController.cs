@@ -64,17 +64,7 @@ public class AuthController : ControllerBase
 
         var token = _jwtTokenService.GenerateToken(user.Id, user.Username);
 
-        return Ok(new
-        {
-            token,
-            user = new
-            {
-                id = user.Id,
-                username = user.Username,
-                syncStrategy = user.SyncStrategy,
-                traktConnected = false
-            }
-        });
+        return Ok(new { token, user = UserPayload.From(user, traktConnected: false) });
     }
 
     [AllowAnonymous]
@@ -95,17 +85,7 @@ public class AuthController : ControllerBase
         var token = _jwtTokenService.GenerateToken(user.Id, user.Username);
         var traktToken = await _userRepository.GetTraktTokenAsync(user.Id);
 
-        return Ok(new
-        {
-            token,
-            user = new
-            {
-                id = user.Id,
-                username = user.Username,
-                syncStrategy = user.SyncStrategy,
-                traktConnected = traktToken != null
-            }
-        });
+        return Ok(new { token, user = UserPayload.From(user, traktConnected: traktToken != null) });
     }
 
     [HttpGet("me")]
@@ -125,13 +105,7 @@ public class AuthController : ControllerBase
 
         var traktToken = await _userRepository.GetTraktTokenAsync(userId);
 
-        return Ok(new
-        {
-            id = user.Id,
-            username = user.Username,
-            syncStrategy = user.SyncStrategy,
-            traktConnected = traktToken != null
-        });
+        return Ok(UserPayload.From(user, traktConnected: traktToken != null));
     }
 
     [HttpPost("sync-strategy")]
@@ -152,8 +126,87 @@ public class AuthController : ControllerBase
         await _userRepository.UpdateSyncStrategyAsync(userId, request.Strategy);
         return Ok(new { success = true, strategy = request.Strategy });
     }
+
+    // Change password for accounts that already have one. Telegram-only accounts (no password yet)
+    // use set-credentials instead.
+    [HttpPost("change-password")]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
+        {
+            return Unauthorized(new { error = "UNAUTHORIZED" });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 6)
+        {
+            return BadRequest(new { error = "INVALID_INPUT", message = "New password must be at least 6 characters" });
+        }
+
+        var user = await _userRepository.GetByIdAsync(userId);
+        if (user == null)
+        {
+            return NotFound(new { error = "USER_NOT_FOUND" });
+        }
+
+        if (string.IsNullOrEmpty(user.PasswordHash))
+        {
+            return BadRequest(new { error = "NO_PASSWORD_SET", message = "This account has no password. Set a login and password first." });
+        }
+
+        if (!_passwordHasher.VerifyPassword(request.CurrentPassword, user.PasswordHash))
+        {
+            return Unauthorized(new { error = "INVALID_CREDENTIALS", message = "Current password is incorrect" });
+        }
+
+        await _userRepository.UpdatePasswordAsync(userId, _passwordHasher.HashPassword(request.NewPassword));
+        return Ok(new { success = true });
+    }
+
+    // Add a username + password to a Telegram-only account (created via Telegram login, no password).
+    // After this the account can sign in both ways.
+    [HttpPost("set-credentials")]
+    public async Task<IActionResult> SetCredentials([FromBody] SetCredentialsRequest request)
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
+        {
+            return Unauthorized(new { error = "UNAUTHORIZED" });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 6)
+        {
+            return BadRequest(new { error = "INVALID_INPUT", message = "Username cannot be empty and password must be at least 6 characters" });
+        }
+
+        var user = await _userRepository.GetByIdAsync(userId);
+        if (user == null)
+        {
+            return NotFound(new { error = "USER_NOT_FOUND" });
+        }
+
+        if (!string.IsNullOrEmpty(user.PasswordHash))
+        {
+            return BadRequest(new { error = "CREDENTIALS_ALREADY_SET", message = "This account already has a password. Use change-password instead." });
+        }
+
+        var username = request.Username.Trim();
+        var existing = await _userRepository.GetByUsernameAsync(username);
+        if (existing != null && existing.Id != userId)
+        {
+            return BadRequest(new { error = "USER_ALREADY_EXISTS", message = "Username is already taken" });
+        }
+
+        await _userRepository.SetCredentialsAsync(userId, username, _passwordHasher.HashPassword(request.Password));
+
+        var updated = await _userRepository.GetByIdAsync(userId);
+        var traktToken = await _userRepository.GetTraktTokenAsync(userId);
+        return Ok(UserPayload.From(updated!, traktConnected: traktToken != null));
+    }
 }
 
 public record RegisterRequest(string Username, string Password);
 public record LoginRequest(string Username, string Password);
 public record UpdateSyncStrategyRequest(string Strategy);
+public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+public record SetCredentialsRequest(string Username, string Password);

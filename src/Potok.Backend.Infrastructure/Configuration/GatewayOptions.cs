@@ -11,5 +11,14 @@ public record GatewayOptions
     public string? AdminPassword { get; init; }
     public string AdminUsername { get; init; } = "admin";
     public bool AuthRequired => true;
+
+    public string? TelegramBotToken { get; init; }
+    public string? TelegramBotUsername { get; init; }
+
+    // Telegram auth is active only when both the bot token (for HMAC verification) and the bot
+    // username (for the login widget) are configured. Leaving either unset disables the feature,
+    // so the Telegram service and its dependencies are never registered (see ServicesConfiguration).
+    public bool TelegramAuthEnabled =>
+        !string.IsNullOrWhiteSpace(TelegramBotToken) && !string.IsNullOrWhiteSpace(TelegramBotUsername);
 }
 

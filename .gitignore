@@ -402,3 +402,4 @@ src/Potok.Backend.SearchEngine/config.local.yml
 .worktrees/
 /src/Potok.Backend.TorrentGo/torrent-cache/
 /src/Potok.Backend.TorrentGo/Potok.Backend.TorrentGo
+/src/Potok.Backend.PluginBundler/Potok.Backend.PluginBundler

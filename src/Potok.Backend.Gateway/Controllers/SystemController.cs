@@ -22,7 +22,9 @@ public class SystemController : ControllerBase
         return Ok(new
         {
             multiUserMode = _options.Value.MultiUserMode,
-            authRequired = _options.Value.AuthRequired
+            authRequired = _options.Value.AuthRequired,
+            telegramAuthEnabled = _options.Value.TelegramAuthEnabled,
+            telegramBotUsername = _options.Value.TelegramBotUsername
         });
     }
 
