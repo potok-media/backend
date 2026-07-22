@@ -10,7 +10,7 @@ services:
       - PORT=${GATEWAY_PORT:-5000}
       # Connection string is assembled from the DB_* parts (single source of truth).
       - ConnectionStrings__DefaultConnection=Host=${DB_HOST:-db};Port=${DB_PORT:-5432};Database=${DB_NAME:-potok};Username=${DB_USER:-potok};Password=${DB_PASSWORD:-potok};Timeout=30;CommandTimeout=60;
-      - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY}
+      - Gateway__TmdbApiKey=${TMDB_API_KEY}
       - Gateway__MultiUserMode=${GATEWAY_MULTI_USER_MODE:-false}
       - Gateway__JwtSecret=${GATEWAY_JWT_SECRET:-default-fallback-gateway-jwt-secret-key-32-chars-long}
       # Telegram login: set both to enable auth/registration via the Telegram Login Widget.
@@ -58,6 +58,8 @@ services:
       # ------------------------------------------------------------------------
     environment:
       - PORT=${TORRENTGO_PORT:-5282}
+      # TMDB lookup for the Add-torrent dialog (same key as the gateway).
+      - TMDB_API_KEY=${TMDB_API_KEY}
     # Hardware transcoding: default maps a harmless no-op device so this works on any host. Set
     # GPU_DEVICE=/dev/dri:/dev/dri in your .env (Intel/AMD) to pass a GPU in — TorrentGo then
     # auto-detects and uses it (only if it passes a startup probe incl. keyframe alignment), else

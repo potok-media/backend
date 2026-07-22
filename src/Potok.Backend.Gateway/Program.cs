@@ -60,6 +60,12 @@ builder.Services.AddSignalR(options =>
    options.DisableImplicitFromServicesParameters = true;
 });
 
+// Co-watch room registry (presence + lifecycle) + its idle-room sweeper. In-memory, single instance; behind
+// IRoomStore so a Redis-backed store can drop in for multi-instance / restart-durable deployments.
+builder.Services.AddSingleton<Potok.Backend.Infrastructure.Gateway.Hubs.IRoomStore,
+    Potok.Backend.Infrastructure.Gateway.Hubs.RoomStore>();
+builder.Services.AddHostedService<Potok.Backend.Infrastructure.Gateway.Hubs.RoomSweeper>();
+
 // Internal plugin-bundler sidecar: supervised child process + loopback-only client.
 // Hidden, hardcoded, never exposed — see Services/PluginBundlerConstants.cs.
 builder.Services.AddHostedService<Potok.Backend.Gateway.Services.PluginBundlerHost>();
