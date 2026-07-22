@@ -36,6 +36,16 @@ func (h *HandlerContext) torrentGrace() time.Duration {
 	return 60 * time.Second
 }
 
+// maxStreams is the admission cap on concurrent playback sessions, DERIVED from the global RAM budget
+// (each live session eviction-protects a ~64MB read-ahead window). Scales automatically when the user
+// changes the budget in the UI — no separate knob. 0 = unlimited (no storage).
+func (h *HandlerContext) maxStreams() int {
+	if h.Engine != nil && h.Engine.Storage != nil {
+		return h.Engine.Storage.DerivedMaxStreams()
+	}
+	return 0
+}
+
 type playbackKeepalive struct {
 	SessionID string `json:"sessionId"`
 	Hash      string `json:"hash"`
@@ -51,6 +61,16 @@ func (h *HandlerContext) HandlePlaybackKeepalive(w http.ResponseWriter, r *http.
 		return
 	}
 	h.lifecycleMu.Lock()
+	// Admission control: a brand-new session beyond the cap is refused so the un-evictable read-ahead
+	// windows can't outgrow the global cache budget. Existing sessions always refresh (never dropped).
+	if _, exists := h.playback[req.SessionID]; !exists {
+		if max := h.maxStreams(); max > 0 && len(h.playback) >= max {
+			h.lifecycleMu.Unlock()
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			http.Error(w, "too many concurrent streams", http.StatusTooManyRequests)
+			return
+		}
+	}
 	h.playback[req.SessionID] = &playSession{hash: req.Hash, file: req.File, lastPing: time.Now()}
 	h.lifecycleMu.Unlock()
 
@@ -109,6 +129,14 @@ func (h *HandlerContext) ReapPlaybackSessions() {
 		grace := h.torrentGrace()
 		for _, t := range h.Engine.Client.Torrents() {
 			hash := t.InfoHash().HexString()
+			// Persistent torrents are never reaped: pinned OR disk-mode (they download to completion in the
+			// background with no viewer). Keep their grace clock fresh so a session-less one survives.
+			if h.isPersistentTorrent(hash) {
+				h.lifecycleMu.Lock()
+				h.torrentSeen[hash] = now
+				h.lifecycleMu.Unlock()
+				continue
+			}
 			h.lifecycleMu.Lock()
 			drop := false
 			if h.torrentRefcountLocked(hash) > 0 {
@@ -135,4 +163,40 @@ func (h *HandlerContext) torrentRefcountLocked(hash string) int {
 		}
 	}
 	return n
+}
+
+// Watchers is the anonymous count of live playback sessions on a torrent (a refcount, not identities —
+// TorrentGo never sees who is watching). Safe wrapper over torrentRefcountLocked for the management API.
+func (h *HandlerContext) Watchers(hash string) int {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+	return h.torrentRefcountLocked(hash)
+}
+
+// watchersByHash snapshots, in one lock, the live-session count and the current file per torrent for the
+// list endpoint (avoids taking lifecycleMu once per torrent).
+func (h *HandlerContext) watchersByHash() (counts map[string]int, files map[string]string) {
+	counts = make(map[string]int)
+	files = make(map[string]string)
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+	for _, s := range h.playback {
+		counts[s.hash]++
+		if _, ok := files[s.hash]; !ok && s.file != "" {
+			files[s.hash] = s.file
+		}
+	}
+	return counts, files
+}
+
+// sessionStats returns total live sessions and how many distinct torrents are being streamed right now.
+func (h *HandlerContext) sessionStats() (sessions, streamingTorrents int) {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+	sessions = len(h.playback)
+	seen := make(map[string]struct{}, len(h.playback))
+	for _, s := range h.playback {
+		seen[s.hash] = struct{}{}
+	}
+	return sessions, len(seen)
 }

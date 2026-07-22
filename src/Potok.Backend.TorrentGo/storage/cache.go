@@ -23,7 +23,9 @@ type Cache struct {
 	pieceCount int
 	totalSize  int64
 	torrent    *torrent.Torrent
-	closed     bool // set by Close(); blocks post-teardown resurrection of a dropped torrent's cache
+	closed     bool         // set by Close(); blocks post-teardown resurrection of a dropped torrent's cache
+	store      *Storage     // back-pointer for the global accountant; nil in unit tests (falls back to local eviction)
+	disk       *diskBacking // non-nil in disk mode: pieces spill to / reload from disk instead of re-downloading
 }
 
 func NewCache(hash metainfo.Hash, capacity int64, pieceLen int64, pieceCount int) *Cache {
@@ -68,15 +70,54 @@ func (c *Cache) Piece(p metainfo.Piece) storage.PieceImpl {
 
 func (c *Cache) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	c.closed = true
+	var released int64
 	for _, mp := range c.pieces {
-		mp.Release()
+		released += mp.ReleaseAndSize()
 	}
 	c.pieces = make(map[int]*MemPiece)
 	c.filled = 0
+	disk := c.disk
+	c.mu.Unlock()
+
+	// Return this torrent's resident bytes to the global accountant, or it would leak (never re-subtracted).
+	if c.store != nil && released != 0 {
+		c.store.addGlobalFilled(-released)
+	}
+	// Release the disk file handle but KEEP the files — a pinned torrent's data must survive restart.
+	// Actual file deletion is RemoveDisk (drop path only).
+	if disk != nil {
+		_ = disk.Close()
+	}
 	return nil
+}
+
+// Filled is this torrent's resident RAM cache bytes (diagnostics).
+func (c *Cache) Filled() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.filled
+}
+
+// DiskBytes estimates this torrent's on-disk bytes (persisted pieces × piece length). 0 in stream mode.
+func (c *Cache) DiskBytes() int64 {
+	c.mu.RLock()
+	disk, pl := c.disk, c.pieceLen
+	c.mu.RUnlock()
+	if disk == nil {
+		return 0
+	}
+	return int64(disk.HaveCount()) * pl
+}
+
+// RemoveDisk deletes this torrent's on-disk data + bitmap (drop / explicit delete). No-op in stream mode.
+func (c *Cache) RemoveDisk() {
+	c.mu.Lock()
+	disk := c.disk
+	c.mu.Unlock()
+	if disk != nil {
+		disk.Remove()
+	}
 }
 
 func (c *Cache) GetOrCreateMemPiece(idx int, size int64) *MemPiece {
@@ -98,23 +139,34 @@ func (c *Cache) GetOrCreateMemPiece(idx int, size int64) *MemPiece {
 
 func (c *Cache) MarkNotComplete(idx int) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if c.closed {
+		c.mu.Unlock()
 		return
 	}
+	var freed int64
 	if mp, ok := c.pieces[idx]; ok {
-		c.filled -= mp.ReleaseAndSize() // subtract exactly what this piece contributed (was leaked before)
+		freed = mp.ReleaseAndSize() // subtract exactly what this piece contributed (was leaked before)
+		c.filled -= freed
 		delete(c.pieces, idx)
+	}
+	c.mu.Unlock()
+
+	if freed != 0 && c.store != nil {
+		c.store.addGlobalFilled(-freed)
 	}
 }
 
 func (c *Cache) UpdateFilled(n int64) {
 	c.mu.Lock()
-	if !c.closed {
+	add := !c.closed
+	if add {
 		c.filled += n
 	}
 	c.mu.Unlock()
+
+	if add && c.store != nil {
+		c.store.addGlobalFilled(n)
+	}
 }
 
 func (c *Cache) EvictIfNeeded() {
@@ -202,6 +254,9 @@ func (c *Cache) cleanPieces() {
 		size := cand.mp.ReleaseAndSize()
 		c.filled -= size
 		delete(c.pieces, cand.index)
+		if c.store != nil {
+			c.store.addGlobalFilled(-size)
+		}
 
 		slog.Debug("Evicted piece", "index", cand.index, "size", size, "hash", c.hash.HexString())
 
@@ -210,6 +265,137 @@ func (c *Cache) cleanPieces() {
 			idx := cand.index
 			go t.Piece(idx).UpdateCompletion()
 		}
+	}
+}
+
+type evictCand struct {
+	index    int
+	mp       *MemPiece
+	accessed time.Time
+}
+
+// collectEvictCandidates returns this cache's evictable pieces (complete, not inside any reader's
+// protected window) with their last-access time, for the global cross-torrent eviction pass.
+func (c *Cache) collectEvictCandidates() []evictCand {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	protected := c.getReaderWindows()
+	var out []evictCand
+	for idx, mp := range c.pieces {
+		if !protected[idx] && mp.IsComplete() {
+			out = append(out, evictCand{index: idx, mp: mp, accessed: mp.Accessed()})
+		}
+	}
+	return out
+}
+
+// evictPiece drops one piece chosen by the global pass, re-validating under the lock that it is still
+// the same, resident, complete, and unprotected piece — so a race with a concurrent access/eviction
+// can't double-free or evict a piece a reader just started needing.
+func (c *Cache) evictPiece(idx int, mp *MemPiece) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	cur, ok := c.pieces[idx]
+	if !ok || cur != mp || !mp.IsComplete() {
+		c.mu.Unlock()
+		return
+	}
+	if c.getReaderWindows()[idx] {
+		c.mu.Unlock()
+		return
+	}
+	size := mp.ReleaseAndSize()
+	c.filled -= size
+	delete(c.pieces, idx)
+	t := c.torrent
+	c.mu.Unlock()
+
+	if c.store != nil {
+		c.store.addGlobalFilled(-size)
+	}
+	slog.Debug("Evicted piece (global)", "index", idx, "size", size, "hash", c.hash.HexString())
+	if t != nil {
+		go t.Piece(idx).UpdateCompletion()
+	}
+}
+
+// evictAfterComplete is the eviction trigger fired when a piece completes. With the global accountant it
+// runs a cross-torrent pass; without it (unit tests) it falls back to this cache's local eviction.
+func (c *Cache) evictAfterComplete() {
+	if c.store != nil {
+		c.store.evictGlobalIfNeeded()
+		return
+	}
+	c.EvictIfNeeded()
+}
+
+// --- Disk mode (Phase 2) -------------------------------------------------------------------------
+
+// pieceComplete reports whether a piece is available without triggering a download: resident-and-complete
+// in RAM, OR persisted on disk. Used by Piece.Completion so an evicted disk piece still reads as complete
+// and anacrolix never re-requests it. Does NOT hydrate (called very frequently).
+func (c *Cache) pieceComplete(idx int) bool {
+	c.mu.RLock()
+	mp, ok := c.pieces[idx]
+	disk := c.disk
+	c.mu.RUnlock()
+	if ok && mp.IsComplete() {
+		return true
+	}
+	return disk != nil && disk.Has(idx)
+}
+
+// persistIfDisk writes a just-completed piece to disk (once) in disk mode. Called from Piece.MarkComplete
+// while the piece bytes are still resident.
+func (c *Cache) persistIfDisk(idx int, mp *MemPiece) {
+	disk := c.disk
+	if disk == nil || disk.Has(idx) {
+		return
+	}
+	data := mp.Snapshot()
+	if data == nil {
+		return
+	}
+	if err := disk.WritePiece(idx, data); err != nil {
+		slog.Warn("disk persist failed", "index", idx, "hash", c.hash.HexString(), "error", err)
+	}
+}
+
+// hydrateIfNeeded reloads an evicted disk-mode piece from disk into its MemPiece, so a read serves it
+// without re-downloading. No-op in stream mode, or when the piece is already resident, mid-download, or
+// not on disk. The reloaded bytes re-enter the RAM accountant (and may trigger eviction elsewhere).
+func (c *Cache) hydrateIfNeeded(idx int, mp *MemPiece, size int64) {
+	disk := c.disk
+	if disk == nil || mp.HasData() || !disk.Has(idx) {
+		return
+	}
+	buf := make([]byte, size)
+	n, err := disk.ReadPiece(idx, buf)
+	if err != nil || int64(n) != size {
+		if err != nil {
+			slog.Warn("disk hydrate failed", "index", idx, "hash", c.hash.HexString(), "error", err)
+		}
+		return
+	}
+	loaded := mp.LoadComplete(buf)
+	if loaded > 0 {
+		c.UpdateFilled(int64(loaded))
+		if c.torrent != nil {
+			go c.torrent.Piece(idx).UpdateCompletion()
+		}
+		c.evictAfterComplete()
+	}
+}
+
+func (c *Cache) clearDisk(idx int) {
+	if c.disk != nil {
+		c.disk.Clear(idx)
 	}
 }
 

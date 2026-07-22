@@ -25,6 +25,9 @@ func NewPiece(index int, size int64, cache *Cache) *Piece {
 func (p *Piece) ReadAt(buf []byte, off int64) (n int, err error) {
 	slog.Debug("Piece ReadAt", "index", p.index, "off", off, "len", len(buf))
 	mp := p.cache.GetOrCreateMemPiece(p.index, p.size)
+	// Disk mode: an evicted-but-persisted piece is reloaded from disk here (covers anacrolix seeding reads
+	// too, not just the player Reader). No-op in stream mode / when already resident.
+	p.cache.hydrateIfNeeded(p.index, mp, p.size)
 	return mp.ReadAt(buf, off)
 }
 
@@ -42,12 +45,15 @@ func (p *Piece) MarkComplete() error {
 	slog.Debug("Piece MarkComplete", "index", p.index)
 	mp := p.cache.GetOrCreateMemPiece(p.index, p.size)
 	mp.MarkComplete()
-	p.cache.EvictIfNeeded()
+	// Disk mode: persist the verified piece to disk (once) before it can be evicted from RAM.
+	p.cache.persistIfDisk(p.index, mp)
+	p.cache.evictAfterComplete()
 	return nil
 }
 
 func (p *Piece) MarkNotComplete() error {
 	slog.Debug("Piece MarkNotComplete", "index", p.index)
+	p.cache.clearDisk(p.index) // hash failure → drop any stale on-disk copy so it re-downloads
 	p.cache.MarkNotComplete(p.index)
 	return nil
 }
@@ -58,8 +64,9 @@ func (p *Piece) Done() <-chan struct{} {
 }
 
 func (p *Piece) Completion() storage.Completion {
-	mp := p.cache.GetOrCreateMemPiece(p.index, p.size)
-	complete := mp.IsComplete()
+	// RAM-resident-complete OR persisted on disk. The disk check is what keeps an evicted disk-mode piece
+	// "complete" so anacrolix serves it from disk instead of re-downloading. Does not hydrate (hot path).
+	complete := p.cache.pieceComplete(p.index)
 	slog.Debug("Piece Completion check", "index", p.index, "complete", complete)
 	return storage.Completion{
 		Complete: complete,

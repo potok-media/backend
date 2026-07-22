@@ -12,9 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"Potok.Backend.TorrentGo/bt"
+	"Potok.Backend.TorrentGo/catalog"
 	"Potok.Backend.TorrentGo/config"
 	"Potok.Backend.TorrentGo/speed"
 	"github.com/anacrolix/torrent/metainfo"
@@ -32,10 +34,12 @@ type HandlerContext struct {
 	SpeedMonitor    *speed.Monitor
 	Config          *config.Config
 	ThumbService    *ThumbnailService
-	durationCache   sync.Map // map[string]float64
-	timecodeCache   sync.Map // map[string]map[string]*TimecodeRange
-	metadataCache   sync.Map // map[string][]byte
-	headersCache    sync.Map // map[string]*FileHeaders
+	Catalog         *catalog.Catalog // remembered media metadata + pin/mode, keyed by infohash
+	StartedAt       time.Time        // process start, for the diagnostics uptime
+	durationCache   sync.Map         // map[string]float64
+	timecodeCache   sync.Map         // map[string]map[string]*TimecodeRange
+	metadataCache   sync.Map         // map[string][]byte
+	headersCache    sync.Map         // map[string]*FileHeaders
 	metadataSFG     singleflight.Group
 	hlsSegList      sync.Map           // map[string]*segList — cached VOD segmentation per file
 	hlsSegSFG       singleflight.Group // coalesce concurrent cold segList builds — the video + audio index.m3u8 requests build the SAME list, so only one runs the 40s+25s cold probe/Cues wait
@@ -43,6 +47,7 @@ type HandlerContext struct {
 	hlsLayoutSFG    singleflight.Group // coalesce concurrent cold stream-layout probes (every produce path + both playlists probe the same layout)
 	audioCont       sync.Map           // map[hash_file_rel]*media.ContinuousAAC — continuous AAC transcode per NON-AAC audio track (copy-sliced into segments)
 	audioContSFG    singleflight.Group // coalesce concurrent starts of the same track's continuous transcoder
+	audioContCount  atomic.Int64       // live continuous-AAC transcoders (~100MB each); capped by Config.MaxAudioTranscoders
 	hlsSegCache     segCache           // LRU of produced segment bytes — serving source, decoupled from sessions
 	// One lock over the torrent lifecycle: playback sessions + the drop grace clock. Single owner of that
 	// state (anacrolix/Jellyfin shape), so the old Delete-outside-lock / LoadOrStore-before-lock races
@@ -64,6 +69,8 @@ func NewHandlerContext(engine *bt.Engine, sm *speed.Monitor, cfg *config.Config,
 		SpeedMonitor: sm,
 		Config:       cfg,
 		ThumbService: ts,
+		Catalog:      catalog.NewPersistent(catalogDir(cfg)),
+		StartedAt:    time.Now(),
 	}
 	if cfg != nil && cfg.HlsCacheBytes > 0 {
 		hc.hlsSegCache.maxBytes = cfg.HlsCacheBytes
@@ -79,6 +86,58 @@ func NewHandlerContext(engine *bt.Engine, sm *speed.Monitor, cfg *config.Config,
 	return hc
 }
 
+// isPersistentTorrent reports whether a torrent must survive the reaper: pinned, or disk-mode (downloading
+// to disk in the background, no viewer needed).
+func (h *HandlerContext) isPersistentTorrent(hash string) bool {
+	if h.Catalog == nil {
+		return false
+	}
+	e, ok := h.Catalog.Get(hash)
+	return ok && (e.Pinned || e.DownloadMode == catalog.ModeDisk)
+}
+
+func catalogDir(cfg *config.Config) string {
+	if cfg != nil {
+		return cfg.DataDir
+	}
+	return ""
+}
+
+// RestorePinned re-adds pinned torrents from the persisted catalog on startup so they survive a restart:
+// their metadata came from the catalog, their bytes from the on-disk .dat (disk mode → instant playback,
+// no re-download). Best-effort per torrent; runs in the background since metadata resolution can block.
+func (h *HandlerContext) RestorePinned() {
+	if h.Catalog == nil {
+		return
+	}
+	for _, e := range h.Catalog.All() {
+		if !e.Pinned || e.Source == "" {
+			continue
+		}
+		disk := e.DownloadMode == catalog.ModeDisk
+		t, err := bt.ResolveTorrent(context.Background(), h.Engine.Client, e.Source)
+		if err != nil {
+			slog.Warn("restore pinned torrent failed", "hash", e.Hash, "error", err)
+			continue
+		}
+		// Set mode before metadata resolves so OpenTorrent attaches the disk backing (which reloads the
+		// existing bitmap → pieces already on disk are complete).
+		h.Engine.Storage.SetMode(t.InfoHash(), disk)
+		tt := t
+		downloadAll := disk && h.Config != nil && h.Config.DownloadDir != ""
+		go func() {
+			select {
+			case <-tt.GotInfo():
+				if downloadAll {
+					tt.DownloadAll() // finish any missing pieces in the background
+				}
+			case <-time.After(90 * time.Second):
+			}
+		}()
+		slog.Info("restored pinned torrent", "hash", e.Hash, "disk", disk)
+	}
+}
+
 type TorrentFilesRequest struct {
 	Title           string  `json:"title"`
 	EnglishTitle    *string `json:"englishTitle,omitempty"`
@@ -89,6 +148,9 @@ type TorrentFilesRequest struct {
 	OriginalTitle   *string `json:"originalTitle,omitempty"`
 	Poster          *string `json:"poster,omitempty"`
 	TmdbId          *int64  `json:"tmdbId,omitempty"`
+	// DownloadMode selects storage: "disk" persists the whole file to POTOK_DOWNLOAD_DIR (survives
+	// restart, plays without re-buffering); anything else / omitted = "stream" (RAM cache only).
+	DownloadMode *string `json:"downloadMode,omitempty"`
 }
 
 type TorrentFileItem struct {
@@ -105,6 +167,12 @@ type TorrentFileItem struct {
 type TorrentFilesResponse struct {
 	Hash  *string           `json:"hash"`
 	Items []TorrentFileItem `json:"items"`
+	// External (sidecar) tracks for "ext" releases: dub audio / subtitle files that live as SEPARATE files in
+	// the torrent (folders next to the .mkv) instead of muxed in. They keep their true 1-based torrent index in
+	// Id, so the plugin can reference them on the HLS master (?xa=) / metadata (?xs=) URLs. The video Items list
+	// is unchanged — the plugin's episode-mapping never sees these.
+	AudioFiles    []TorrentFileItem `json:"audioFiles,omitempty"`
+	SubtitleFiles []TorrentFileItem `json:"subtitleFiles,omitempty"`
 }
 
 func (h *HandlerContext) HandleGetFiles(w http.ResponseWriter, r *http.Request) {
@@ -134,6 +202,11 @@ func (h *HandlerContext) HandleGetFiles(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Select storage mode BEFORE metadata resolves (→ OpenTorrent), so a disk-mode torrent gets its disk
+	// backing attached before any piece completes. The infohash is known immediately after add.
+	diskMode := req.DownloadMode != nil && *req.DownloadMode == catalog.ModeDisk
+	h.Engine.Storage.SetMode(t.InfoHash(), diskMode)
+
 	if t.Info() == nil {
 		slog.Info("Waiting for metadata...", "hash", t.InfoHash().HexString())
 
@@ -162,15 +235,65 @@ func (h *HandlerContext) HandleGetFiles(w http.ResponseWriter, r *http.Request) 
 	h.lifecycleMu.Lock()
 	h.torrentSeen[hashHex] = time.Now()
 	h.lifecycleMu.Unlock()
+
+	// Remember the media metadata this torrent was added with (poster/title/TMDB) so the management UI can
+	// render a proper media card. Fields are optional — the plugin doesn't always send them, and a
+	// magnet added straight from the UI has none — so Upsert only overwrites with non-empty values.
+	if h.Catalog != nil {
+		entry := catalog.Entry{Hash: hashHex, Source: link, Title: req.Title}
+		if req.OriginalTitle != nil {
+			entry.OriginalTitle = *req.OriginalTitle
+		}
+		if req.MediaType != nil {
+			entry.MediaType = *req.MediaType
+		}
+		if req.NumberOfSeasons != nil {
+			entry.NumberOfSeasons = *req.NumberOfSeasons
+		}
+		if req.TmdbId != nil {
+			entry.TmdbID = *req.TmdbId
+		}
+		if req.Poster != nil {
+			entry.Poster = *req.Poster
+		}
+		if diskMode {
+			entry.DownloadMode = catalog.ModeDisk
+		} else {
+			entry.DownloadMode = catalog.ModeStream
+		}
+		h.Catalog.Upsert(entry)
+	}
+
+	// Disk mode = "download the whole file to disk" — prioritise every piece so it fetches to completion in
+	// the background (and can then play without buffering), instead of only what a reader pulls. Guarded on
+	// DownloadDir: without a disk backing, DownloadAll would thrash the RAM cache (evict → re-download loop).
+	if diskMode && h.Config != nil && h.Config.DownloadDir != "" {
+		t.DownloadAll()
+	}
+
 	videoExtensions := map[string]bool{
 		".mkv": true,
 		".mp4": true,
 		".avi": true,
 		".ts":  true,
 		".mov": true,
+		// Blu-ray/AVCHD MPEG-2 TS (BDRemux). libav demuxes them fine; note these are usually HEAVY (30-50GB
+		// HEVC/AVC + many tracks), so transcode/download load is higher than a normal .mkv.
+		".m2ts": true,
+		".mts":  true,
+	}
+	// External (sidecar) dub/subtitle files for "ext" releases (see TorrentFilesResponse). Kept as separate
+	// lists so the plugin can pair them to episodes and reference them by their true torrent index; they never
+	// enter the video Items list.
+	audioExtensions := map[string]bool{
+		".mka": true, ".aac": true, ".ac3": true, ".eac3": true, ".dts": true,
+		".flac": true, ".opus": true, ".mp3": true, ".m4a": true, ".wav": true,
+	}
+	subtitleExtensions := map[string]bool{
+		".ass": true, ".ssa": true, ".srt": true, ".vtt": true, ".sub": true,
 	}
 
-	var videoFiles []parsedFile
+	var videoFiles, audioFiles, subtitleFiles []parsedFile
 
 	mediaType := ""
 	if req.MediaType != nil {
@@ -181,7 +304,7 @@ func (h *HandlerContext) HandleGetFiles(w http.ResponseWriter, r *http.Request) 
 		path := file.Path()
 		ext := strings.ToLower(filepath.Ext(path))
 
-		if !videoExtensions[ext] {
+		if !videoExtensions[ext] && !audioExtensions[ext] && !subtitleExtensions[ext] {
 			continue
 		}
 
@@ -202,25 +325,39 @@ func (h *HandlerContext) HandleGetFiles(w http.ResponseWriter, r *http.Request) 
 			FolderName: "",
 			Extension:  ext,
 		}
+		pf := parsedFile{Item: item, Path: path}
 
-		videoFiles = append(videoFiles, parsedFile{
-			Item: item,
-			Path: path,
-		})
+		switch {
+		case videoExtensions[ext]:
+			videoFiles = append(videoFiles, pf)
+		case audioExtensions[ext]:
+			audioFiles = append(audioFiles, pf)
+		default:
+			subtitleFiles = append(subtitleFiles, pf)
+		}
 	}
 
-	sort.Slice(videoFiles, func(i, j int) bool {
-		return videoFiles[i].Path < videoFiles[j].Path
-	})
+	sortByPath := func(fs []parsedFile) { sort.Slice(fs, func(i, j int) bool { return fs[i].Path < fs[j].Path }) }
+	sortByPath(videoFiles)
+	sortByPath(audioFiles)
+	sortByPath(subtitleFiles)
 
-	items := make([]TorrentFileItem, len(videoFiles))
-	for i, vf := range videoFiles {
-		items[i] = vf.Item
+	collectItems := func(fs []parsedFile) []TorrentFileItem {
+		if len(fs) == 0 {
+			return nil
+		}
+		out := make([]TorrentFileItem, len(fs))
+		for i, vf := range fs {
+			out[i] = vf.Item
+		}
+		return out
 	}
 
 	response := TorrentFilesResponse{
-		Hash:  &hashHex,
-		Items: items,
+		Hash:          &hashHex,
+		Items:         collectItems(videoFiles),
+		AudioFiles:    collectItems(audioFiles),
+		SubtitleFiles: collectItems(subtitleFiles),
 	}
 
 	// Start background intro/outro timecode analysis if it is a multi-file torrent
@@ -269,13 +406,31 @@ func (h *HandlerContext) HandleGetStatus(w http.ResponseWriter, r *http.Request)
 
 	peers := stats.ActivePeers
 
+	// Enrichment for the management UI (name/size/watchers/pinned). Kept additive so the plugin, which
+	// only reads state/progress/peers/speed, is unaffected.
+	name := t.Name()
+	pinned := false
+	if h.Catalog != nil {
+		if e, ok := h.Catalog.Get(hashHex); ok {
+			if e.Title != "" {
+				name = e.Title
+			}
+			pinned = e.Pinned
+		}
+	}
+
 	response := map[string]interface{}{
-		"hash":          hashHex,
-		"state":         state,
-		"progress":      progress,
-		"peers":         peers,
-		"downloadSpeed": speeds.DownloadSpeed,
-		"uploadSpeed":   speeds.UploadSpeed,
+		"hash":           hashHex,
+		"state":          state,
+		"progress":       progress,
+		"peers":          peers,
+		"downloadSpeed":  speeds.DownloadSpeed,
+		"uploadSpeed":    speeds.UploadSpeed,
+		"name":           name,
+		"totalBytes":     length,
+		"completedBytes": t.BytesCompleted(),
+		"watchers":       h.Watchers(hashHex),
+		"pinned":         pinned,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -294,6 +449,9 @@ func (h *HandlerContext) HandleDeleteTorrent(w http.ResponseWriter, r *http.Requ
 	copy(infoHash[:], hexBytes)
 
 	h.dropTorrent(infoHash, hashHex)
+	if h.Catalog != nil {
+		h.Catalog.Remove(hashHex) // explicit delete forgets the metadata + pin/mode (drop just frees runtime)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
@@ -340,6 +498,7 @@ func (h *HandlerContext) dropTorrent(infoHash metainfo.Hash, hashHex string) {
 	// after, keeping a re-drop from racing the slow teardown.
 	go func() {
 		if cache, ok := h.Engine.Storage.GetCache(infoHash); ok {
+			cache.RemoveDisk() // drop path only: free the on-disk .dat/.bitmap (shutdown keeps them)
 			_ = cache.Close()
 			h.Engine.Storage.DeleteCache(infoHash)
 		}

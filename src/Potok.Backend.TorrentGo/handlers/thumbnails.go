@@ -40,6 +40,17 @@ func NewThumbnailCache(maxSize int, ttl time.Duration) *ThumbnailCache {
 	}
 }
 
+// Stats reports the thumbnail cache's entry count, total resident bytes and entry ceiling (diagnostics).
+func (c *ThumbnailCache) Stats() (count int, bytes int64, max int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var b int64
+	for _, e := range c.items {
+		b += int64(len(e.Data))
+	}
+	return len(c.items), b, c.maxSize
+}
+
 func (c *ThumbnailCache) Get(key string) ([]byte, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

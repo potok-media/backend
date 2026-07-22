@@ -26,6 +26,13 @@ type segEntry struct {
 
 const defaultSegCacheBytes = 512 << 20 // 512 MiB rolling window of segments
 
+// stats reports the segment cache's current bytes, entry count and ceiling (for diagnostics).
+func (c *segCache) stats() (bytes int64, count int, max int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.curBytes, len(c.items), c.maxBytes
+}
+
 func (c *segCache) ensure() {
 	if c.ll == nil {
 		c.ll = list.New()

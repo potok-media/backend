@@ -13,13 +13,14 @@ import (
 	"syscall"
 	"time"
 
-	// "Potok.Backend.TorrentGo/auth"
+	"Potok.Backend.TorrentGo/auth"
 	"Potok.Backend.TorrentGo/bt"
 	"Potok.Backend.TorrentGo/config"
 	"Potok.Backend.TorrentGo/handlers"
 	"Potok.Backend.TorrentGo/media"
 	"Potok.Backend.TorrentGo/speed"
 	"Potok.Backend.TorrentGo/storage"
+	"Potok.Backend.TorrentGo/webui"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -126,9 +127,15 @@ func main() {
 	// Handler Context
 	hCtx := handlers.NewHandlerContext(engine, sm, cfg, ts)
 
+	// Re-apply a RAM budget saved from the UI (overrides POTOK_CACHE_SIZE_MB); derived limits follow.
+	hCtx.ApplyPersistedSettings()
+
 	// Playback-session lifecycle: expire lapsed keepalives, cancel unreferenced producers, drop
 	// torrents nobody is watching (refcount over sessions — replaces the old idle-timeout heuristics).
 	go hCtx.ReapPlaybackSessions()
+
+	// Restore pinned torrents from the persisted catalog (survive-restart; disk-mode plays from disk).
+	go hCtx.RestorePinned()
 
 	// 4. Setup router
 	r := chi.NewRouter()
@@ -177,6 +184,9 @@ func main() {
 			r.Get("/{hash}/files/{fileIndex}/metadata", hCtx.HandleGetMediaMetadata)
 			r.Get("/{hash}/files/{fileIndex}/thumbnail", hCtx.HandleGetThumbnail)
 			r.Get("/{hash}/files/{fileIndex}/subtitles/{trackIndex}", hCtx.HandleGetSubtitles)
+			// External subtitle FILE (sidecar in the torrent, "ext" releases): serve the whole file by its torrent
+			// index as VTT/ASS. Distinct from the embedded-track subtitles/{trackIndex} route above.
+			r.Get("/{hash}/files/{fileIndex}/subtitle-file", hCtx.HandleGetExternalSubtitleFile)
 			r.Get("/{hash}/files/{fileIndex}/hls/*", hCtx.HandleHls)
 
 			// RESTful Streaming sub-routes
@@ -197,6 +207,29 @@ func main() {
 		r.Get("/stream/{hash}/{fileIndex}/subtitles/{trackIndex}", hCtx.HandleGetSubtitles)
 		r.Head("/stream/{hash}/{fileIndex}", hCtx.HandleStream)
 		r.Head("/stream/{hash}/{fileIndex}/{filename}", hCtx.HandleStream)
+	})
+
+	// Management contour — the standalone web UI + its control API. Scoped BasicAuth (POTOK_AUTH_USER/PASS;
+	// no-op if unset). Deliberately SEPARATE from the plugin/streaming routes above, which players hit
+	// without credentials and must stay open. Named /api/manage/* so "stats"/"torrents" can't collide with
+	// the per-hash /api/torrents/{hash} routes.
+	r.Group(func(r chi.Router) {
+		r.Use(auth.BasicAuth(cfg))
+
+		r.Get("/api/manage/torrents", hCtx.HandleListTorrents)
+		r.Get("/api/manage/torrents/{hash}/files", hCtx.HandleTorrentFiles)
+		r.Get("/api/manage/stats", hCtx.HandleManageStats)
+		r.Get("/api/manage/settings", hCtx.HandleGetSettings)
+		r.Post("/api/manage/settings", hCtx.HandleSetSettings)
+		r.Get("/api/manage/diagnostics", hCtx.HandleDiagnostics)
+		r.Get("/api/manage/tmdb", hCtx.HandleTmdbLookup)
+		r.Post("/api/manage/library", hCtx.HandleSaveLibrary)
+		r.Post("/api/manage/torrents/{hash}/download", hCtx.HandleDownloadSaved)
+		r.Post("/api/manage/torrents/{hash}/pin", hCtx.HandlePinTorrent)
+		r.Delete("/api/manage/torrents/{hash}/pin", hCtx.HandleUnpinTorrent)
+
+		// Static SPA at the root (index.html + styles.css + app.js), embedded in the binary.
+		r.Handle("/*", webui.Handler())
 	})
 
 	// 5. Start Server

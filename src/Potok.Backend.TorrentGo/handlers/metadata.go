@@ -21,6 +21,11 @@ type ClientTrack struct {
 	Language string `json:"language"`
 	Title    string `json:"title"`
 	RelIndex int    `json:"relIndex"`
+	// SourceFile is 0 for a track embedded in this video file (addressed by RelIndex within the container). For
+	// an EXTERNAL subtitle file (a separate file in the torrent, "ext" releases), it holds that file's true
+	// 1-based torrent index so the plugin builds its src against the external-file endpoint, not the embedded
+	// subtitles/{rel} path.
+	SourceFile int `json:"sourceFile,omitempty"`
 }
 
 type ClientMetadata struct {
@@ -55,25 +60,57 @@ func (h *HandlerContext) HandleGetMediaMetadata(w http.ResponseWriter, r *http.R
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	if val, ok := h.metadataCache.Load(cacheKey); ok {
+	// ?xs=<idx,idx> names EXTERNAL subtitle files (sidecar files in the torrent) to fold in on top of this
+	// video's embedded tracks. It varies per playback and must NOT touch the hash_file metadata cache, so it's
+	// applied to a COPY of the cached/probed base below.
+	xs := r.URL.Query().Get("xs")
+
+	base, ok := h.metadataCache.Load(cacheKey)
+	if !ok {
+		responseVal, err, _ := h.metadataSFG.Do(cacheKey, func() (interface{}, error) {
+			// Detached ctx: this probe is shared via singleflight, so one client disconnecting must not fail
+			// the others (probeAndCacheMetadata applies its own timeout).
+			return h.probeAndCacheMetadata(context.Background(), hashHex, fileIndexStr)
+		})
+		if err != nil {
+			slog.Error("Probing metadata failed", "error", err)
+			http.Error(w, "Probing failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		base = responseVal
+	} else {
 		slog.Debug("Serving metadata from RAM cache", "key", cacheKey)
-		w.Write(val.([]byte))
-		return
 	}
 
-	responseVal, err, _ := h.metadataSFG.Do(cacheKey, func() (interface{}, error) {
-		// Detached ctx: this probe is shared via singleflight, so one client disconnecting must not fail
-		// the others (probeAndCacheMetadata applies its own timeout).
-		return h.probeAndCacheMetadata(context.Background(), hashHex, fileIndexStr)
-	})
+	w.Write(h.withExternalSubtitles(base.([]byte), hashHex, xs))
+}
 
-	if err != nil {
-		slog.Error("Probing metadata failed", "error", err)
-		http.Error(w, "Probing failed: "+err.Error(), http.StatusInternalServerError)
-		return
+// withExternalSubtitles folds the external subtitle files named by xs into a metadata JSON blob, WITHOUT
+// mutating the cached base (external subs are per-playback). Returns the base unchanged when xs is empty or the
+// blob can't be re-marshalled.
+func (h *HandlerContext) withExternalSubtitles(base []byte, hashHex, xs string) []byte {
+	if xs == "" {
+		return base
 	}
-
-	w.Write(responseVal.([]byte))
+	var meta ClientMetadata
+	if err := json.Unmarshal(base, &meta); err != nil {
+		return base
+	}
+	subCount := 0
+	for _, t := range meta.Tracks {
+		if t.Type == "subtitle" {
+			subCount++
+		}
+	}
+	extra := h.appendExternalSubtitleTracks(hashHex, xs, subCount)
+	if len(extra) == 0 {
+		return base
+	}
+	meta.Tracks = append(meta.Tracks, extra...)
+	if merged, err := json.Marshal(meta); err == nil {
+		return merged
+	}
+	return base
 }
 
 func (h *HandlerContext) getOrProbeDuration(ctx context.Context, hashHex, fileIndexStr string) (float64, error) {

@@ -103,6 +103,9 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 		}
 
 		mp := r.cache.GetOrCreateMemPiece(pieceIdx, pieceSize)
+		// Disk mode: reload an evicted-but-persisted piece from disk so the read resolves without a
+		// re-download. No-op in stream mode / when already resident.
+		r.cache.hydrateIfNeeded(pieceIdx, mp, pieceSize)
 		if !mp.IsComplete() && r.torrent != nil {
 			r.torrent.Piece(pieceIdx).UpdateCompletion()
 			r.torrent.Piece(pieceIdx).SetPriority(pol.curPrio)

@@ -46,8 +46,48 @@ func (h *HandlerContext) HandleHls(w http.ResponseWriter, r *http.Request) {
 			h.serveSubRendition(w, r, rel, parts[2])
 			return
 		}
+	case len(parts) == 4 && parts[0] == "xa":
+		// External audio rendition: xa/{extFileIndex}/{rel}/{leaf} — audio demuxed from a SEPARATE torrent file.
+		if extIdx, err := strconv.Atoi(parts[1]); err == nil && extIdx >= 1 {
+			if rel, err := strconv.Atoi(parts[2]); err == nil {
+				h.serveExternalAudioRendition(w, r, extIdx, rel, parts[3])
+				return
+			}
+		}
 	}
 	http.NotFound(w, r)
+}
+
+// serveExternalAudioRendition serves an audio rendition whose SOURCE is a separate torrent file (an "ext"-release
+// dub), addressed by extFileIndex. It reuses the VIDEO file's segment grid (from the {fileIndex} route param) so
+// the audio segments line up with the video timeline, but produces init/segments from the external file — the
+// existing produceAudioInit/produceAudioSegment already key their layout, reader and transcoder cache off the
+// file index they're handed, so pointing them at extFileIndex is all that's required.
+func (h *HandlerContext) serveExternalAudioRendition(w http.ResponseWriter, r *http.Request, extIdx, rel int, leaf string) {
+	hashHex := chi.URLParam(r, "hash")
+	videoFileIndexStr := chi.URLParam(r, "fileIndex")
+	extIdxStr := strconv.Itoa(extIdx)
+	sl, err := h.getSegList(r.Context(), hashHex, videoFileIndexStr) // video grid → timeline alignment
+	if err != nil {
+		http.Error(w, "hls unavailable", http.StatusInternalServerError)
+		return
+	}
+	switch {
+	case leaf == "index.m3u8":
+		writeM3U8(w, renderMediaPlaylist(sl, "init.mp4", "m4s"))
+	case leaf == "init.mp4":
+		h.serveProduced(w, r, fmt.Sprintf("%s_xa%d_a%d_init", hashHex, extIdx, rel), "video/mp4", func() ([]byte, error) {
+			return h.produceAudioInit(r.Context(), hashHex, extIdxStr, rel)
+		})
+	default:
+		if n, ok := parseSeg(leaf, "m4s"); ok && n >= 0 && n < sl.count() {
+			h.serveProduced(w, r, fmt.Sprintf("%s_xa%d_a%d_%d", hashHex, extIdx, rel, n), "video/mp4", func() ([]byte, error) {
+				return h.produceAudioSegment(r.Context(), hashHex, extIdxStr, rel, sl, n)
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}
 }
 
 // serveMasterPlaylist emits the multivariant master: EXT-X-MEDIA per audio/subtitle track + one video variant.
@@ -74,6 +114,7 @@ func (h *HandlerContext) serveMasterPlaylist(w http.ResponseWriter, r *http.Requ
 	b.WriteString("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n")
 
 	audioCount := 0
+	usedAudioNames := map[string]bool{}
 	for _, t := range meta.Tracks {
 		if t.Type != "audio" {
 			continue
@@ -82,9 +123,29 @@ func (h *HandlerContext) serveMasterPlaylist(w http.ResponseWriter, r *http.Requ
 		if audioCount == 0 {
 			def = "YES" // hls.js loads the DEFAULT rendition first; others are fetched only on switch
 		}
+		name := uniqueTrackName(trackName(t, "Audio"), usedAudioNames)
 		fmt.Fprintf(&b, "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"%s\",LANGUAGE=\"%s\",DEFAULT=%s,AUTOSELECT=YES,URI=\"a/%d/index.m3u8\"\n",
-			m3uEscape(trackName(t, "Audio")), t.Language, def, t.RelIndex)
+			m3uEscape(name), t.Language, def, t.RelIndex)
 		audioCount++
+	}
+
+	// External dub files (?xa=<idx,idx>): each separate torrent file becomes one more audio rendition, demuxed
+	// from that file (rel 0) but reusing THIS video's segment grid so timelines align. NAME comes from the
+	// file's folder (parser-free); the file is probed only when the user actually switches to it. Internal
+	// tracks are emitted first, so an internal DEFAULT=YES wins; if the video has zero internal audio, the
+	// first external becomes the default.
+	if extIdxs := parseIndexList(r.URL.Query().Get("xa")); len(extIdxs) > 0 {
+		paths, _ := h.torrentFilePaths(hashHex) // nil paths → externalTrackLabel returns a "Track N" fallback
+		for _, idx := range extIdxs {
+			def := "NO"
+			if audioCount == 0 {
+				def = "YES"
+			}
+			name := uniqueTrackName(externalTrackLabel(paths, idx), usedAudioNames)
+			fmt.Fprintf(&b, "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"%s\",DEFAULT=%s,AUTOSELECT=YES,URI=\"xa/%d/0/index.m3u8\"\n",
+				m3uEscape(name), def, idx)
+			audioCount++
+		}
 	}
 
 	hasSubs := false
@@ -277,3 +338,19 @@ func trackName(t ClientTrack, kind string) string {
 
 // m3uEscape neutralises the one character that would break a quoted attribute value.
 func m3uEscape(s string) string { return strings.ReplaceAll(s, "\"", "'") }
+
+// uniqueTrackName ensures each EXT-X-MEDIA NAME in a group is distinct (hls.js keys its audio menu on NAME;
+// duplicates collapse). Appends " (2)", " (3)", … on collision. Mutates `used` with the returned name.
+func uniqueTrackName(name string, used map[string]bool) string {
+	if !used[name] {
+		used[name] = true
+		return name
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s (%d)", name, i)
+		if !used[candidate] {
+			used[candidate] = true
+			return candidate
+		}
+	}
+}

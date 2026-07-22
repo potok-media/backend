@@ -14,7 +14,7 @@ type Config struct {
 	ListenPort         int
 	ConnsPerTorrent    int
 	HalfOpenConns      int
-	CacheSizeBytes     int64
+	CacheSizeBytes     int64 // INITIAL global piece-cache budget across ALL torrents. Runtime-adjustable from the UI (settings.json overrides this on boot); everything else (max concurrent streams, transcoders) is derived from it.
 	HlsCacheBytes      int64
 	MemLimitBytes      int64
 	PreloadBytes       int64
@@ -23,6 +23,15 @@ type Config struct {
 	TorrentIdleTimeout time.Duration // grace before a torrent with no active playback session is dropped
 	SessionTTL         time.Duration // a playback keepalive lapsed longer than this → the session expires
 	DisableAnalyzer    bool
+	// DownloadDir is where disk-mode torrents persist their pieces (<hash>.dat + .bitmap sidecar). Empty
+	// disables disk mode — every torrent falls back to the RAM-only stream cache.
+	DownloadDir string
+	// DataDir is where the management catalog (metadata + pin/mode) is persisted so it survives restart.
+	// Empty keeps the catalog in-memory only (Phase-1 behaviour).
+	DataDir string
+	// TmdbKey (TMDB_API_KEY, v3 api_key) enables the Add-torrent "fetch from TMDB" lookup. Shared with the
+	// gateway via the same env var. Empty disables it — manual title/poster still work.
+	TmdbKey string
 }
 
 func LoadConfig() *Config {
@@ -48,6 +57,9 @@ func LoadConfig() *Config {
 		TorrentIdleTimeout: getEnvDuration("POTOK_TORRENT_IDLE_TIMEOUT", 60*time.Second),
 		SessionTTL:         getEnvDuration("POTOK_SESSION_TTL", 25*time.Second),
 		DisableAnalyzer:    getEnvBool("POTOK_DISABLE_ANALYZER", false),
+		DownloadDir:        getEnvStr("POTOK_DOWNLOAD_DIR", "downloads"),
+		DataDir:            getEnvStr("POTOK_DATA_DIR", ""),
+		TmdbKey:            getEnvStr("TMDB_API_KEY", ""),
 	}
 }
 

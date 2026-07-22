@@ -89,3 +89,16 @@ func (m *Monitor) GetSpeed(hashHex string) TorrentSpeed {
 	defer m.mu.RUnlock()
 	return m.speeds[hashHex]
 }
+
+// Total sums current download/upload speed across every tracked torrent — the aggregate for the
+// management dashboard KPIs.
+func (m *Monitor) Total() TorrentSpeed {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var t TorrentSpeed
+	for _, s := range m.speeds {
+		t.DownloadSpeed += s.DownloadSpeed
+		t.UploadSpeed += s.UploadSpeed
+	}
+	return t
+}

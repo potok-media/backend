@@ -185,3 +185,46 @@ func (m *MemPiece) Accessed() time.Time {
 	defer m.mu.Unlock()
 	return m.accessed
 }
+
+// HasData reports whether the piece currently holds any buffer (resident, possibly partial). Used to
+// decide whether a disk-mode piece needs hydration from disk.
+func (m *MemPiece) HasData() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data != nil
+}
+
+// Snapshot returns a copy of the full piece bytes if complete, else nil. Used to persist a verified piece
+// to disk without holding the lock across disk I/O.
+func (m *MemPiece) Snapshot() []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.complete || m.data == nil {
+		return nil
+	}
+	out := make([]byte, len(m.data))
+	copy(out, m.data)
+	return out
+}
+
+// LoadComplete hydrates an empty piece from disk-loaded bytes and marks it complete, atomically. Returns
+// the number of bytes it actually installed (0 if the piece already had data — i.e. a concurrent writer
+// or hydrator won the race), so the caller accounts exactly one contribution to Cache.filled.
+func (m *MemPiece) LoadComplete(src []byte) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.data != nil {
+		return 0 // lost the race; someone else is filling this piece
+	}
+	m.data = make([]byte, len(src))
+	copy(m.data, src)
+	for i := range m.writtenBlocks {
+		m.writtenBlocks[i] = true
+	}
+	m.accounted += int64(len(src))
+	m.complete = true
+	m.accessed = time.Now()
+	m.wake()
+	m.closeOnce.Do(func() { close(m.doneCh) })
+	return len(src)
+}

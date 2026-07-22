@@ -60,10 +60,16 @@ func (h *HandlerContext) getAudioCont(ctx context.Context, hashHex, fileIndexStr
 		cont.Cancel()
 		cont.Free()
 		h.audioCont.Delete(key)
+		h.audioContCount.Add(-1)
 	}
 	v, err, _ := h.audioContSFG.Do(key, func() (interface{}, error) {
 		if v, ok := h.audioCont.Load(key); ok {
 			return v, nil
+		}
+		// Cap concurrent transcoders (~100MB each) so audio-heavy multi-stream load can't blow past the
+		// memory budget. Bounds the count, not the piece cache — that stays under the global accountant.
+		if max := h.maxAudioTranscoders(); max > 0 && int(h.audioContCount.Load()) >= max {
+			return nil, fmt.Errorf("audiocont: too many concurrent transcoders (limit %d)", max)
 		}
 		layout, lerr := h.getStreamLayout(ctx, hashHex, fileIndexStr)
 		if lerr != nil {
@@ -83,6 +89,7 @@ func (h *HandlerContext) getAudioCont(ctx context.Context, hashHex, fileIndexStr
 		bgCtx, cancel := context.WithCancel(context.Background())
 		cont.SetCancel(cancel)
 		h.audioCont.Store(key, cont)
+		h.audioContCount.Add(1)
 		go func() {
 			defer cancel()
 			rs, _, oerr := h.openTorrentFileReader(bgCtx, hashHex, fileIndexStr, storage.ClassPlayback)
@@ -166,7 +173,17 @@ func (h *HandlerContext) dropAudioCont(prefix string) {
 				cont.Free()
 			}
 			h.audioCont.Delete(k)
+			h.audioContCount.Add(-1)
 		}
 		return true
 	})
+}
+
+// maxAudioTranscoders is the concurrent continuous-AAC transcoder cap, DERIVED from the global RAM budget
+// (~100MB each). Scales with the single UI budget knob. 0 = unlimited (no storage).
+func (h *HandlerContext) maxAudioTranscoders() int {
+	if h.Engine != nil && h.Engine.Storage != nil {
+		return h.Engine.Storage.DerivedMaxAudioTranscoders()
+	}
+	return 0
 }
