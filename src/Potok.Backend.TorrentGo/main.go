@@ -209,28 +209,38 @@ func main() {
 		r.Head("/stream/{hash}/{fileIndex}/{filename}", hCtx.HandleStream)
 	})
 
-	// Management contour — the standalone web UI + its control API. Scoped BasicAuth (POTOK_AUTH_USER/PASS;
+	// Management contour — the standalone web UI + its control API. Off by default; enable with
+	// TORRENTGO_ENABLE_WEBUI=true. When enabled, protect it with scoped BasicAuth (POTOK_AUTH_USER/PASS;
 	// no-op if unset). Deliberately SEPARATE from the plugin/streaming routes above, which players hit
 	// without credentials and must stay open. Named /api/manage/* so "stats"/"torrents" can't collide with
 	// the per-hash /api/torrents/{hash} routes.
-	r.Group(func(r chi.Router) {
-		r.Use(auth.BasicAuth(cfg))
+	if cfg.EnableWebUI {
+		r.Group(func(r chi.Router) {
+			r.Use(auth.BasicAuth(cfg))
 
-		r.Get("/api/manage/torrents", hCtx.HandleListTorrents)
-		r.Get("/api/manage/torrents/{hash}/files", hCtx.HandleTorrentFiles)
-		r.Get("/api/manage/stats", hCtx.HandleManageStats)
-		r.Get("/api/manage/settings", hCtx.HandleGetSettings)
-		r.Post("/api/manage/settings", hCtx.HandleSetSettings)
-		r.Get("/api/manage/diagnostics", hCtx.HandleDiagnostics)
-		r.Get("/api/manage/tmdb", hCtx.HandleTmdbLookup)
-		r.Post("/api/manage/library", hCtx.HandleSaveLibrary)
-		r.Post("/api/manage/torrents/{hash}/download", hCtx.HandleDownloadSaved)
-		r.Post("/api/manage/torrents/{hash}/pin", hCtx.HandlePinTorrent)
-		r.Delete("/api/manage/torrents/{hash}/pin", hCtx.HandleUnpinTorrent)
+			r.Get("/api/manage/torrents", hCtx.HandleListTorrents)
+			r.Get("/api/manage/torrents/{hash}/files", hCtx.HandleTorrentFiles)
+			r.Get("/api/manage/stats", hCtx.HandleManageStats)
+			r.Get("/api/manage/settings", hCtx.HandleGetSettings)
+			r.Post("/api/manage/settings", hCtx.HandleSetSettings)
+			r.Get("/api/manage/diagnostics", hCtx.HandleDiagnostics)
+			r.Get("/api/manage/tmdb", hCtx.HandleTmdbLookup)
+			r.Post("/api/manage/library", hCtx.HandleSaveLibrary)
+			r.Post("/api/manage/torrents/{hash}/download", hCtx.HandleDownloadSaved)
+			r.Post("/api/manage/torrents/{hash}/pin", hCtx.HandlePinTorrent)
+			r.Delete("/api/manage/torrents/{hash}/pin", hCtx.HandleUnpinTorrent)
 
-		// Static SPA at the root (index.html + styles.css + app.js), embedded in the binary.
-		r.Handle("/*", webui.Handler())
-	})
+			// Static SPA at the root (index.html + styles.css + app.js), embedded in the binary.
+			r.Handle("/*", webui.Handler())
+		})
+		if cfg.AuthUser == "" {
+			slog.Warn("Web UI enabled WITHOUT auth — set POTOK_AUTH_USER/POTOK_AUTH_PASS to protect the management panel")
+		} else {
+			slog.Info("Web UI enabled (BasicAuth protected)")
+		}
+	} else {
+		slog.Info("Web UI disabled (set TORRENTGO_ENABLE_WEBUI=true to enable)")
+	}
 
 	// 5. Start Server
 	server := &http.Server{

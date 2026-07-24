@@ -7,10 +7,14 @@ import (
 )
 
 type Config struct {
-	Port               int
-	LogLevel           string
-	AuthUser           string
-	AuthPass           string
+	Port     int
+	LogLevel string
+	AuthUser string
+	AuthPass string
+	// EnableWebUI gates the standalone management web UI + its /api/manage/* control API. Off by
+	// default so the admin panel is never exposed unintentionally; the plugin/streaming routes that
+	// players and the gateway hit are unaffected. When on, still protect it with POTOK_AUTH_USER/PASS.
+	EnableWebUI        bool
 	ListenPort         int
 	ConnsPerTorrent    int
 	HalfOpenConns      int
@@ -45,6 +49,7 @@ func LoadConfig() *Config {
 		LogLevel:           getEnvStr("POTOK_LOG_LEVEL", "info"),
 		AuthUser:           getEnvStr("POTOK_AUTH_USER", ""),
 		AuthPass:           getEnvStr("POTOK_AUTH_PASS", ""),
+		EnableWebUI:        getEnvBool("TORRENTGO_ENABLE_WEBUI", false),
 		ListenPort:         getEnvInt("POTOK_LISTEN_PORT", 55123),
 		ConnsPerTorrent:    getEnvInt("POTOK_CONNS_PER_TORRENT", 250),
 		HalfOpenConns:      getEnvInt("POTOK_HALF_OPEN_CONNS", 120),
@@ -59,7 +64,7 @@ func LoadConfig() *Config {
 		DisableAnalyzer:    getEnvBool("POTOK_DISABLE_ANALYZER", false),
 		DownloadDir:        getEnvStr("POTOK_DOWNLOAD_DIR", "downloads"),
 		DataDir:            getEnvStr("POTOK_DATA_DIR", ""),
-		TmdbKey:            getEnvStr("TMDB_API_KEY", ""),
+		TmdbKey:            getEnvStr("TMDB_API_KEY", "2c4fa42c601c29b6fea7ad9b211c46f0"),
 	}
 }
 

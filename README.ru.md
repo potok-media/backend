@@ -70,7 +70,7 @@ services:
       - PORT=${GATEWAY_PORT:-5000}
       # Строка подключения собирается из частей DB_* (единый источник истины).
       - ConnectionStrings__DefaultConnection=Host=${DB_HOST:-db};Port=${DB_PORT:-5432};Database=${DB_NAME:-potok};Username=${DB_USER:-potok};Password=${DB_PASSWORD:-potok};Timeout=30;CommandTimeout=60;
-      - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY}
+      - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY:-${TMDB_API_KEY:-2c4fa42c601c29b6fea7ad9b211c46f0}}
       - Gateway__MultiUserMode=${GATEWAY_MULTI_USER_MODE:-false}
       - Gateway__JwtSecret=${GATEWAY_JWT_SECRET:-default-fallback-gateway-jwt-secret-key-32-chars-long}
     depends_on:
@@ -153,7 +153,7 @@ volumes:
 
 | Переменная | Куда попадает | Описание | По умолчанию |
 |---|---|---|---|
-| `GATEWAY_TMDB_API_KEY` | `Gateway__TmdbApiKey` | Ключ TMDB API (**обязательно**) | — |
+| `GATEWAY_TMDB_API_KEY` | `Gateway__TmdbApiKey` | Ключ TMDB API — необязательно; принимает и `TMDB_API_KEY`, при отсутствии используется общий дефолт | встроенный |
 | `GATEWAY_MULTI_USER_MODE` | `Gateway__MultiUserMode` | Саморегистрация пользователей | `false` |
 | `GATEWAY_JWT_SECRET` | `Gateway__JwtSecret` | Секрет JWT (смените в продакшене) | смените в продакшене |
 | `DB_HOST` / `DB_PORT` | строка подключения | Хост/порт PostgreSQL (`db` = встроенный) | `db` / `5432` |
