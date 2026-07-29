@@ -1,6 +1,4 @@
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Options;
-using Potok.Backend.Core.Models.SearchEngine.Options;
 
 namespace Potok.Backend.Infrastructure.Middlewares;
 
@@ -13,10 +11,8 @@ public partial class ModHeaders
         _next = next;
     }
 
-    public Task Invoke(HttpContext httpContext, IOptionsSnapshot<Config> configOptions)
+    public Task Invoke(HttpContext httpContext)
     {
-        var config = configOptions.Value;
-
         httpContext.Response.Headers.AccessControlAllowCredentials = "true";
         httpContext.Response.Headers["Access-Control-Allow-Private-Network"] = "true";
         httpContext.Response.Headers.AccessControlAllowHeaders = "Accept, Origin, Content-Type";

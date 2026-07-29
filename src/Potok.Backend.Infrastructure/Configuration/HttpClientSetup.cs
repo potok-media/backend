@@ -1,14 +1,16 @@
 using System.Net;
 using System.Security.Authentication;
-using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.Configuration;
 
 internal static class HttpClientSetup
 {
+    private const string DefaultUserAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
     internal static void ApplyBrowserHeaders(HttpClient client)
     {
-        client.DefaultRequestHeaders.UserAgent.ParseAdd(TrackerHttpClient.DefaultUserAgent);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(DefaultUserAgent);
         client.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
         client.DefaultRequestHeaders.Add(
             "Accept",

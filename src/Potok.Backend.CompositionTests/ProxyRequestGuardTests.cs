@@ -1,4 +1,4 @@
-using Potok.Backend.Gateway.Security;
+using Potok.Backend.Infrastructure.Security;
 
 namespace Potok.Backend.CompositionTests;
 
