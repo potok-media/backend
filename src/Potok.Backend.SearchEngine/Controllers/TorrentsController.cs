@@ -27,7 +27,7 @@ public class TorrentsController : ControllerBase
             ForceSearch = request.ForceSearch ?? false
         };
 
-        var results = await _searchService.SearchTorrentsAsync(internalRequest);
+        var results = await _searchService.SearchTorrentsAsync(internalRequest, HttpContext.RequestAborted);
 
         var sharedResults = results.Select(r => {
             var tags = new List<TorrentTag>();

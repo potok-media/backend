@@ -1,10 +1,8 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using Polly;
 using Polly.CircuitBreaker;
-using Polly.Retry;
-using Polly.Timeout;
 using Potok.Backend.Core.Enums;
 using Potok.Backend.Core.Interfaces.Gateway;
 using Potok.Backend.Core.Models.SearchEngine.Details;
@@ -16,7 +14,8 @@ namespace Potok.Backend.Infrastructure.SearchEngine.Services.Search;
 
 public class RemoteSearchService : BaseSearchService, IRemoteSearchService
 {
-    private readonly ICacheService _cacheService;
+    public const int TrackerSearchTimeoutSeconds = 60;
+
     private readonly ILogger _logger;
     private readonly IReadOnlyDictionary<TrackerType, ITrackerSearch> _providers;
 
@@ -25,7 +24,6 @@ public class RemoteSearchService : BaseSearchService, IRemoteSearchService
     public RemoteSearchService(IOptions<Config> config, TrackerHttpClient httpService, ICacheService cacheService, ILogger logger,
         IEnumerable<ITrackerSearch> providers) : base(config.Value, httpService, cacheService)
     {
-        _cacheService = cacheService;
         _logger = logger;
         _providers = providers.ToDictionary(p => p.Tracker, p => p);
     }
@@ -37,7 +35,8 @@ public class RemoteSearchService : BaseSearchService, IRemoteSearchService
 
     public async Task<IReadOnlyCollection<TorrentDetails>> SearchAsync(
         string query,
-        IReadOnlyCollection<TrackerType>? trackers = null)
+        IReadOnlyCollection<TrackerType>? trackers = null,
+        CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(query))
             return [];
@@ -46,7 +45,7 @@ public class RemoteSearchService : BaseSearchService, IRemoteSearchService
         if (targetTrackers.Count == 0)
             return [];
 
-        return await SearchUncachedAsync(query, targetTrackers);
+        return await SearchUncachedAsync(query, targetTrackers, ct);
     }
 
     private IReadOnlyCollection<TrackerType> ResolveTrackers(IReadOnlyCollection<TrackerType>? trackers)
@@ -60,14 +59,15 @@ public class RemoteSearchService : BaseSearchService, IRemoteSearchService
 
     private async Task<IReadOnlyCollection<TorrentDetails>> SearchUncachedAsync(
         string query,
-        IReadOnlyCollection<TrackerType> trackers)
+        IReadOnlyCollection<TrackerType> trackers,
+        CancellationToken ct)
     {
         _logger.Information("Search '{@Query}' on {@Trackers} trackers", query, trackers);
 
         var tasks = trackers.Select(async tracker =>
         {
             var sw = Stopwatch.StartNew();
-            var results = await SearchTrackerSafeAsync(tracker, query, CancellationToken.None);
+            var results = await SearchTrackerSafeAsync(tracker, query, ct);
             sw.Stop();
             _logger.Information("Tracker: {Tracker}; \tSW: {SW}ms", tracker, sw.ElapsedMilliseconds);
             return results;
@@ -88,23 +88,27 @@ public class RemoteSearchService : BaseSearchService, IRemoteSearchService
         if (!_providers.TryGetValue(tracker, out var provider))
             return [];
 
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(TrackerSearchTimeoutSeconds));
+
         var pipeline = GetPipeline(tracker);
 
         try
         {
-            return await pipeline.ExecuteAsync(async token => await provider.SearchAsync(query, token), ct);
+            return await pipeline.ExecuteAsync(
+                async token => await provider.SearchAsync(query, token),
+                cts.Token);
         }
         catch (BrokenCircuitException)
         {
             _logger.Warning("Circuit is OPEN for tracker {Tracker}. Search skipped.", tracker);
         }
-        catch (TimeoutRejectedException)
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            _logger.Warning("Search TIMEOUT (Polly) for tracker {Tracker}", tracker);
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.Debug("Tracker search cancelled for {Tracker}", tracker);
+            _logger.Warning(
+                "Tracker {Tracker} hit the {Timeout}s budget; returning whatever it already stored",
+                tracker,
+                TrackerSearchTimeoutSeconds);
         }
         catch (Exception ex)
         {
@@ -116,29 +120,16 @@ public class RemoteSearchService : BaseSearchService, IRemoteSearchService
 
     private ResiliencePipeline<IReadOnlyCollection<TorrentDetails>> GetPipeline(TrackerType tracker)
     {
-        return Pipelines.GetOrAdd(tracker, _ => 
-        {
-            return new ResiliencePipelineBuilder<IReadOnlyCollection<TorrentDetails>>()
-                .AddRetry(new RetryStrategyOptions<IReadOnlyCollection<TorrentDetails>>
-                {
-                    ShouldHandle = new PredicateBuilder<IReadOnlyCollection<TorrentDetails>>()
-                        .Handle<Exception>(ex => ex is not BrokenCircuitException && ex is not OperationCanceledException),
-                    MaxRetryAttempts = 2,
-                    Delay = TimeSpan.FromSeconds(2),
-                    BackoffType = DelayBackoffType.Exponential,
-                    OnRetry = args =>
-                    {
-                        _logger.Debug("Retrying search for {Tracker}. Attempt: {Attempt}", tracker, args.AttemptNumber);
-                        return default;
-                    }
-                })
+        return Pipelines.GetOrAdd(tracker, _ =>
+            new ResiliencePipelineBuilder<IReadOnlyCollection<TorrentDetails>>()
                 .AddCircuitBreaker(new CircuitBreakerStrategyOptions<IReadOnlyCollection<TorrentDetails>>
                 {
                     FailureRatio = 0.5,
                     SamplingDuration = TimeSpan.FromSeconds(30),
                     MinimumThroughput = 3,
                     BreakDuration = TimeSpan.FromMinutes(1),
-                    ShouldHandle = new PredicateBuilder<IReadOnlyCollection<TorrentDetails>>().Handle<Exception>(),
+                    ShouldHandle = new PredicateBuilder<IReadOnlyCollection<TorrentDetails>>()
+                        .Handle<Exception>(ex => ex is not OperationCanceledException),
                     OnOpened = _ =>
                     {
                         _logger.Error("Circuit Breaker OPENED for {Tracker} for 1 minute", tracker);
@@ -150,8 +141,6 @@ public class RemoteSearchService : BaseSearchService, IRemoteSearchService
                         return default;
                     }
                 })
-                .AddTimeout(TimeSpan.FromSeconds(30))
-                .Build();
-        });
+                .Build());
     }
 }

@@ -32,16 +32,7 @@ public class KinozalSearch : BaseKinozal
         if (results.Count == 0)
             return [];
 
-        var tasks = results.Select(async torrent =>
-        {
-            await _torrentRepository.AddOrUpdateAsync(
-                [torrent],
-                (t, token) => FetchDetailsAsync(t, token),
-                ct);
-        });
-
-        await Task.WhenAll(tasks);
-
+        await EnrichPopularFirstAsync(results, _torrentRepository, FetchDetailsAsync, ct);
         return results;
     }
 }

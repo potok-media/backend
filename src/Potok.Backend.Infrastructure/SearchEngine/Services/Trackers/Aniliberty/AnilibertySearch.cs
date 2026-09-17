@@ -30,14 +30,21 @@ public class AnilibertySearch : BaseTrackerSearch
         if (releases.Count == 0)
             return [];
 
-        var tasks = releases.Select(async release =>
+        var results = new List<TorrentDetails>();
+        try
         {
-            var releaseTorrents = await FetchReleaseTorrentsAsync(release.Id, ct);
-            return releaseTorrents.Select(t => Map(release, t, release.Name, release.OriginalName));
-        });
+            foreach (var release in releases)
+            {
+                ct.ThrowIfCancellationRequested();
+                var releaseTorrents = await FetchReleaseTorrentsAsync(release.Id, ct);
+                results.AddRange(releaseTorrents.Select(t => Map(release, t, release.Name, release.OriginalName)));
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
 
-        var results = await Task.WhenAll(tasks);
-        return results.SelectMany(r => r).ToList();
+        return results;
     }
 
     private async Task<List<ReleaseDto>> SearchReleasesAsync(string query, CancellationToken ct)

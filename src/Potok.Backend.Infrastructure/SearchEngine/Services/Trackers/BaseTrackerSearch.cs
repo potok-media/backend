@@ -37,6 +37,33 @@ public abstract class BaseTrackerSearch : ITrackerRefreshProvider
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    ///     Fetch magnets from the most seeded releases first and stop when <paramref name="ct"/> is cancelled.
+    ///     Parallel WhenAll of every topic page is how a tracker search overruns the 60s budget.
+    /// </summary>
+    protected async Task EnrichPopularFirstAsync(
+        IReadOnlyCollection<TorrentDetails> torrents,
+        ITorrentRepository repository,
+        Func<TorrentDetails, CancellationToken, Task<bool>> fetchDetails,
+        CancellationToken ct)
+    {
+        if (torrents.Count == 0)
+            return;
+
+        var ordered = torrents
+            .OrderByDescending(t => t.Sid)
+            .ThenByDescending(t => t.Pir)
+            .ToList();
+
+        try
+        {
+            await repository.AddOrUpdateAsync(ordered, fetchDetails, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+    }
+
     protected static long ParseSize(string val, string unit)
     {
         if (!double.TryParse(val.Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out var value))

@@ -41,17 +41,7 @@ public class NNMClubSearch : BaseNNMClub
             return [];
 
         var torrents = ParseTrackerPage(html, Host);
-
-        var tasks = torrents.Select(async torrent =>
-        {
-            await _torrentRepository.AddOrUpdateAsync(
-                [torrent],
-                (t, token) => FetchDetailsAsync(t, token),
-                ct);
-        });
-
-        await Task.WhenAll(tasks);
-
+        await EnrichPopularFirstAsync(torrents, _torrentRepository, FetchDetailsAsync, ct);
         return torrents;
     }
 }

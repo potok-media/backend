@@ -8,7 +8,9 @@ public interface ISearchService
     /// <summary>
     ///     Универсальный поиск торрентов.
     /// </summary>
-    Task<IReadOnlyCollection<TorrentDetails>> SearchTorrentsAsync(TorrentSearchQuery request);
+    Task<IReadOnlyCollection<TorrentDetails>> SearchTorrentsAsync(
+        TorrentSearchQuery request,
+        CancellationToken ct = default);
 
     /// <summary>
     ///     Поиск для Jackett API v2.0

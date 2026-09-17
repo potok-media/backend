@@ -18,5 +18,6 @@ public interface IRemoteSearchService
     /// </summary>
     Task<IReadOnlyCollection<TorrentDetails>> SearchAsync(
         string query,
-        IReadOnlyCollection<TrackerType>? trackers = null);
+        IReadOnlyCollection<TrackerType>? trackers = null,
+        CancellationToken ct = default);
 }

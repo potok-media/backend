@@ -33,16 +33,7 @@ public sealed class RuTrackerSearch : BaseRuTracker
         foreach (var item in parsed)
             results[item.Url] = item;
 
-        var tasks = results.Values.Select(async torrent =>
-        {
-            await _torrentRepository.AddOrUpdateAsync(
-                [torrent],
-                (t, token) => FetchDetailsAsync(t, token),
-                ct);
-        });
-
-        await Task.WhenAll(tasks);
-
+        await EnrichPopularFirstAsync(results.Values.ToList(), _torrentRepository, FetchDetailsAsync, ct);
         return results.Values.ToList();
     }
 }

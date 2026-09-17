@@ -37,7 +37,9 @@ public class SearchService : BaseSearchService, ISearchService
         _config = config.Value;
     }
 
-    public async Task<IReadOnlyCollection<TorrentDetails>> SearchTorrentsAsync(TorrentSearchQuery request)
+    public async Task<IReadOnlyCollection<TorrentDetails>> SearchTorrentsAsync(
+        TorrentSearchQuery request,
+        CancellationToken ct = default)
     {
         var cacheKey = CacheKeyBuilder.Build("api", "v1.0", "torrents", 
             request.TmdbId?.ToString() ?? "null", 
@@ -47,14 +49,14 @@ public class SearchService : BaseSearchService, ISearchService
 
         if (request.ForceSearch)
         {
-            var torrents = await ExecuteUnifiedSearch(request);
+            var torrents = await ExecuteUnifiedSearch(request, ct);
             await CacheService.SetAsync(cacheKey, torrents, TimeSpan.FromMinutes(_config.Cache.Expiry));
             return torrents;
         }
 
         return await CacheService.GetOrCreateAsync(cacheKey, async () =>
         {
-            var torrents = await ExecuteUnifiedSearch(request);
+            var torrents = await ExecuteUnifiedSearch(request, ct);
             return (IReadOnlyCollection<TorrentDetails>)torrents;
         }, TimeSpan.FromMinutes(_config.Cache.Expiry));
     }
@@ -65,7 +67,9 @@ public class SearchService : BaseSearchService, ISearchService
         return new RootObject { Results = new List<Result>(), Error = "Jackett API is disabled" };
     }
 
-    private async Task<List<TorrentDetails>> ExecuteUnifiedSearch(TorrentSearchQuery request)
+    private async Task<List<TorrentDetails>> ExecuteUnifiedSearch(
+        TorrentSearchQuery request,
+        CancellationToken ct)
     {
         List<TorrentDetails> torrents = new();
 
@@ -83,7 +87,10 @@ public class SearchService : BaseSearchService, ISearchService
 
             if (!string.IsNullOrWhiteSpace(trackerQuery))
             {
-                var fetched = await _remoteSearch.SearchAsync(trackerQuery, _remoteSearch.GetSupportedTrackers());
+                var fetched = await _remoteSearch.SearchAsync(
+                    trackerQuery,
+                    _remoteSearch.GetSupportedTrackers(),
+                    ct);
                 
                 // Tag with TmdbId before saving
                 foreach (var t in fetched)
