@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Potok.Backend.Infrastructure.Configuration;
 using Serilog;
 
@@ -28,6 +29,7 @@ internal static class TestServiceCollectionFactory
         var configuration = CreateConfiguration();
 
         services.AddSingleton(Log.Logger);
+        services.AddLogging();
         services.Configure<GatewayOptions>(configuration.GetSection("Gateway"));
         services.AddHttpContextAccessor();
         services.AddCoreInfrastructure(configuration);
@@ -46,6 +48,7 @@ internal static class TestServiceCollectionFactory
         var configuration = CreateConfiguration();
 
         services.AddSingleton(Log.Logger);
+        services.AddLogging();
         services.AddCoreInfrastructure(configuration);
         services.AddSearchEngineServices(configuration);
 

@@ -97,6 +97,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      flaresolverr:
+        condition: service_started
+
+  # Cloudflare challenge solver for RU trackers (rutracker.org etc.).
+  # SearchEngine talks to it on the compose network. Do not publish 8191.
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: potok-flaresolverr
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=info
+      - TZ=Europe/Moscow
 
   # 🌊 BitTorrent streaming engine (TorrentGo)
   potok-torrentgo:
@@ -180,6 +192,13 @@ Create it on the host and fill in trackers — no copy step from the repo.
 
 Full guide: [SearchEngine & TorrentGo](https://potok.rip/wiki) (wiki sidebar). Sample structure:
 [`src/Potok.Backend.SearchEngine/config.yml`](src/Potok.Backend.SearchEngine/config.yml).
+
+Optional FlareSolverr sidecar for Cloudflare-protected RU trackers. Enable `flaresolverr` in
+`config.yml`. In compose the URL is `http://flaresolverr:8191/v1`; on the host
+`http://127.0.0.1:8191/v1`. Do not publish port 8191. Budget extra ~1 GiB RAM for Chrome.
+`cf_clearance` cookies cannot be reused by .NET HttpClient (TLS fingerprint); SearchEngine
+sends guarded-host traffic through the FlareSolverr browser session. Enabled tracker hosts
+are probed on startup — the browser is used only when Cloudflare actually challenges.
 
 > [!NOTE]
 > Behind NAT/Tailscale without port forwarding, leave TorrentGo's inbound UDP port commented

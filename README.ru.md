@@ -93,6 +93,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      flaresolverr:
+        condition: service_started
+
+  # Обход Cloudflare для RU-трекеров (rutracker.org и др.).
+  # SearchEngine ходит к нему по сети compose. Порт 8191 не публикуйте.
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: potok-flaresolverr
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=info
+      - TZ=Europe/Moscow
 
   # 🌊 Стриминговый движок BitTorrent (TorrentGo)
   potok-torrentgo:
@@ -173,6 +185,14 @@ SearchEngine нужен `./config.yml` рядом с `docker-compose.yml` (мо�
 
 Подробно: [SearchEngine и TorrentGo](https://potok.rip/wiki) (раздел в сайдбаре вики). Образец структуры:
 [`src/Potok.Backend.SearchEngine/config.yml`](src/Potok.Backend.SearchEngine/config.yml).
+
+Опциональный sidecar FlareSolverr для RU-трекеров за Cloudflare. Включите `flaresolverr`
+в `config.yml`. В compose URL — `http://flaresolverr:8191/v1`; на хосте —
+`http://127.0.0.1:8191/v1`. Порт 8191 не публикуйте. Заложите дополнительно ~1 ГБ RAM
+под Chrome. Куки `cf_clearance` нельзя переиспользовать в .NET HttpClient (TLS fingerprint);
+трафик к guarded-хостам SearchEngine идёт через браузерную сессию FlareSolverr. При старте
+опрашиваются хосты включённых трекеров — браузер поднимается, только если Cloudflare
+действительно отвечает challenge.
 
 > [!NOTE]
 > За NAT/Tailscale без проброса портов оставьте входящий UDP-порт TorrentGo закомментированным —

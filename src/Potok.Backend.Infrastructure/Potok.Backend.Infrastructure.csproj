@@ -34,4 +34,8 @@
       <ProjectReference Include="..\Potok.Backend.Core\Potok.Backend.Core.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <InternalsVisibleTo Include="Potok.Backend.CompositionTests" />
+    </ItemGroup>
+
 </Project>

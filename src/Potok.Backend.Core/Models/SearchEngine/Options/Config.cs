@@ -18,6 +18,9 @@ public class Config
     [ConfigurationKeyName("proxy")]
     public ProxySettings Proxy { get; set; } = new();
 
+    [ConfigurationKeyName("flaresolverr")]
+    public FlareSolverrSettings FlareSolverr { get; set; } = new();
+
     [ConfigurationKeyName("cache")]
     public Cache Cache { get; set; } = new();
 

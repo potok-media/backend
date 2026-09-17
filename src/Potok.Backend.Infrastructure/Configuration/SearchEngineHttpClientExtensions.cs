@@ -2,6 +2,7 @@ using System.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Potok.Backend.Core.Models.SearchEngine.Options;
+using Potok.Backend.Infrastructure.Http.FlareSolverr;
 
 namespace Potok.Backend.Infrastructure.Configuration;
 
@@ -20,6 +21,12 @@ public static class SearchEngineHttpClientExtensions
 
         services.AddHttpClient("NoProxyNoRedirect", HttpClientSetup.ApplyBrowserHeaders)
             .ConfigurePrimaryHttpMessageHandler(() => HttpClientSetup.CreateHandler(allowAutoRedirect: false));
+
+        services.AddHttpClient(FlareSolverrClient.HttpClientName, client =>
+        {
+            client.Timeout = Timeout.InfiniteTimeSpan;
+            client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+        });
 
         return services;
     }

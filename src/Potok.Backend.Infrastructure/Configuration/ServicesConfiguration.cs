@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Potok.Backend.Core.Interfaces.Gateway;
+using Potok.Backend.Infrastructure.BackgroundHosting.Cloudflare;
 using Potok.Backend.Infrastructure.BackgroundHosting.Media;
 using Potok.Backend.Infrastructure.BackgroundHosting.Refresh;
 using Potok.Backend.Infrastructure.BackgroundHosting.RuTracker;
@@ -89,6 +90,7 @@ public static class ServicesConfiguration
         services.AddHostedService<TorrentMediaProbeHostedService>();
         services.AddHostedService<RuTrackerPopularHostedService>();
         services.AddHostedService<RefreshHostedService>();
+        services.AddHostedService<CloudflareWarmupHostedService>();
 
         return services;
     }

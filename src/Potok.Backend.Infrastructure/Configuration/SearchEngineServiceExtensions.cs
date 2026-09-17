@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Potok.Backend.Core.Interfaces.Gateway;
 using Potok.Backend.Core.Models.SearchEngine.Options;
 using Potok.Backend.Infrastructure.Http;
+using Potok.Backend.Infrastructure.Http.FlareSolverr;
 using Potok.Backend.Infrastructure.Persistence.Repositories;
 using Potok.Backend.Infrastructure.SearchEngine.Services;
 using Potok.Backend.Infrastructure.SearchEngine.Services.Search;
@@ -49,6 +50,8 @@ public static class SearchEngineServiceExtensions
             .AddScoped<ITrackerRefreshProvider, RuTrackerPopularService>();
 
         services.AddSingleton<ICacheService, CacheService>();
+        services.AddSingleton<CloudflareGuard>();
+        services.AddSingleton<IFlareSolverrClient, FlareSolverrClient>();
         services.AddScoped<TrackerHttpClient>();
         services.AddSearchEngineHttpClients();
 

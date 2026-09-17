@@ -150,7 +150,7 @@ public class RemoteSearchService : BaseSearchService, IRemoteSearchService
                         return default;
                     }
                 })
-                .AddTimeout(TimeSpan.FromSeconds(10))
+                .AddTimeout(TimeSpan.FromSeconds(30))
                 .Build();
         });
     }

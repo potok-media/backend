@@ -115,7 +115,7 @@ public class BaseRuTracker : BaseTrackerSearch, ITrackerCatalogEnricher
         var formEncoded = string.Join("&",
             pairs.Select(kv => $"{HttpUtility.UrlEncode(kv.Key)}={HttpUtility.UrlEncode(kv.Value)}"));
 
-        var response = await HttpService.PostResponseAsync(
+        using var response = await HttpService.PostResponseAsync(
             LoginUrl,
             new StringContent(formEncoded, Encoding.Default, "application/x-www-form-urlencoded"),
             cookie: null,
@@ -125,7 +125,11 @@ public class BaseRuTracker : BaseTrackerSearch, ITrackerCatalogEnricher
             allowRedirect: false,
             ct: ct);
 
-        if (response.StatusCode is not HttpStatusCode.Found)
+        var cookies = response.Headers.TryGetValues("Set-Cookie", out var v) ? v : [];
+        var cookie = string.Join("; ", cookies);
+
+        // FlareSolverr follows the login 302, so success is a session cookie, not only Found.
+        if (response.StatusCode is not HttpStatusCode.Found && !LooksLikeRuTrackerSession(cookie))
         {
             if (reAuth)
                 return string.Empty;
@@ -133,12 +137,16 @@ public class BaseRuTracker : BaseTrackerSearch, ITrackerCatalogEnricher
             return await Authorize(true, ct);
         }
 
-        var cookies = response.Headers.TryGetValues("Set-Cookie", out var v) ? v : [];
-        var cookie = string.Join("; ", cookies);
-
         await CacheService.SetAsync(CookieKey, cookie, TimeSpan.FromDays(Config.Cache.AuthExpiry));
 
         return cookie;
+    }
+
+    private static bool LooksLikeRuTrackerSession(string cookie)
+    {
+        return cookie.Contains("bb_session", StringComparison.OrdinalIgnoreCase)
+               || cookie.Contains("bbuserid", StringComparison.OrdinalIgnoreCase)
+               || cookie.Contains("bb_data", StringComparison.OrdinalIgnoreCase);
     }
 
     protected IReadOnlyCollection<TorrentDetails> ParseForumPage(
