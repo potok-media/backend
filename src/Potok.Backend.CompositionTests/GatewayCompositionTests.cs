@@ -17,6 +17,13 @@ public class GatewayCompositionTests
         Assert.NotNull(scope.ServiceProvider.GetService<ICacheService>());
     }
 
-    // The SearchEngine domain no longer exists in this repo — its types aren't referenced at all,
-    // which is a stronger guarantee than the old negative-registration assertion.
+    [Fact]
+    public void Gateway_DoesNotRegister_SearchEngineServices()
+    {
+        using var provider = TestServiceCollectionFactory.BuildGatewayDomainProvider();
+
+        Assert.Null(provider.GetService<ISearchService>());
+        Assert.Null(provider.GetService<ITorrentRepository>());
+        Assert.Empty(provider.GetServices<ITrackerSearch>());
+    }
 }

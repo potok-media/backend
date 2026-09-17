@@ -1,0 +1,69 @@
+# SearchEngine tracker config.
+# Create ./config.yml next to docker-compose.yml — compose mounts it as config.local.yml.
+# Guide: https://potok.rip/wiki (page «SearchEngine & TorrentGo» in the sidebar).
+# Listen port is PORT / SEARCH_ENGINE_PORT, not this file.
+
+cache:
+  enable: true
+  expiry: 15          # min
+  auth-expiry: 1      # days
+
+refresh:
+  enable: false
+  timeout: 1440       # min
+  older-than-min: 180
+  limit: 50
+
+ffprobe:
+  enable: false
+  timeout: 60
+  tsuri: ''
+  batch-size: 20
+  attempts: 3
+  authorization:
+    login: ''
+    password: ''
+
+# HTTP proxies for tracker requests. list: [] — direct connection. Random pick from list.
+# Item: url (required), username/password — if the proxy needs auth.
+proxy:
+  bypass-on-local: false
+  list:
+    - url: 'http://proxy.example.com:8080'
+      username: ''
+      password: ''
+
+rutracker:
+  enable-search: true
+  authorization:
+    login: ''
+    password: ''
+  popular:
+    enable: false
+    timeout: 600
+    max-pages: 3
+    categories: [1106, 1105, 2491, 1389]
+
+animelayer:
+  enable-search: true
+  authorization:
+    login: ''
+    password: ''
+
+nnmclub:
+  enable-search: true
+
+rutor:
+  enable-search: true
+
+aniliberty:
+  enable-search: true
+
+kinozal:
+  enable-search: true
+  authorization:
+    login: ''
+    password: ''
+
+megapeer:
+  enable-search: true

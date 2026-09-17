@@ -20,6 +20,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  IMAGE_NAME_PREFIX: ${{ github.repository }}
 
 jobs:
   # --- Versioning: compute the new version, push the git tag, expose values to downstream jobs ---
@@ -53,7 +54,10 @@ jobs:
       - name: Get current version and bump
         id: get_version
         run: |
+          # Fetch all tags from remote repository to have correct tag history
           git fetch --tags --force
+
+          # Get latest tag matching "v*" or fallback to "v0.0.0"
           LATEST_TAG=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || echo "v0.0.0")
           echo "Latest Git Tag: $LATEST_TAG"
 
@@ -81,9 +85,16 @@ jobs:
               NEW_BETA_NUM=$((BETA_NUM + 1))
               NEW_VERSION="$BASE-beta.$NEW_BETA_NUM"
             else
-              if [ "$BUMP" = "major" ]; then MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0;
-              elif [ "$BUMP" = "minor" ]; then MINOR=$((MINOR + 1)); PATCH=0;
-              else PATCH=$((PATCH + 1)); fi
+              if [ "$BUMP" = "major" ]; then
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+              elif [ "$BUMP" = "minor" ]; then
+                MINOR=$((MINOR + 1))
+                PATCH=0
+              else
+                PATCH=$((PATCH + 1))
+              fi
               NEW_VERSION="$MAJOR.$MINOR.$PATCH-beta.1"
             fi
             echo "tag_secondary=beta" >> "$GITHUB_OUTPUT"
@@ -92,9 +103,16 @@ jobs:
             if [ "$HAS_BETA" = "true" ]; then
               NEW_VERSION="$BASE"
             else
-              if [ "$BUMP" = "major" ]; then MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0;
-              elif [ "$BUMP" = "minor" ]; then MINOR=$((MINOR + 1)); PATCH=0;
-              else PATCH=$((PATCH + 1)); fi
+              if [ "$BUMP" = "major" ]; then
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+              elif [ "$BUMP" = "minor" ]; then
+                MINOR=$((MINOR + 1))
+                PATCH=0
+              else
+                PATCH=$((PATCH + 1))
+              fi
               NEW_VERSION="$MAJOR.$MINOR.$PATCH"
             fi
             echo "tag_secondary=latest" >> "$GITHUB_OUTPUT"
@@ -116,7 +134,7 @@ jobs:
           OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "owner_lc=${OWNER_LC}" >> $GITHUB_OUTPUT
 
-  # --- Build & push the gateway image ---
+  # --- Build & push all images in parallel (wall-clock = slowest image, not the sum) ---
   build:
     needs: version
     runs-on: ubuntu-latest
@@ -130,6 +148,14 @@ jobs:
             image: potok-gateway
             context: .
             file: ./src/Potok.Backend.Gateway/Dockerfile
+          - name: searchengine
+            image: potok-searchengine
+            context: .
+            file: ./src/Potok.Backend.SearchEngine/Dockerfile
+          - name: torrentgo
+            image: potok-torrentgo
+            context: ./src/Potok.Backend.TorrentGo
+            file: ./src/Potok.Backend.TorrentGo/Dockerfile
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -163,10 +189,13 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ needs.version.outputs.new_version }}
+          # Registry-backed build cache (a :buildcache tag per image). Unlike GHA cache it has no
+          # 10 GB / LRU eviction, so the expensive TorrentGo stage that compiles FFmpeg from source
+          # persists across releases and is reused until FFMPEG_VERSION or the build flags change.
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ needs.version.outputs.owner_lc }}/${{ matrix.image }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ needs.version.outputs.owner_lc }}/${{ matrix.image }}:buildcache,mode=max
 
-  # --- GitHub Release (after the image is published) ---
+  # --- GitHub Release (after all images are published) ---
   release:
     needs: [version, build]
     runs-on: ubuntu-latest
@@ -177,6 +206,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ needs.version.outputs.new_version }}
-          name: potok-gateway Release v${{ needs.version.outputs.new_version }}
+          name: Backend Release v${{ needs.version.outputs.new_version }}
           generate_release_notes: true
           prerelease: ${{ needs.version.outputs.prerelease }}

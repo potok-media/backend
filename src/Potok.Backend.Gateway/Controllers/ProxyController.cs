@@ -11,7 +11,7 @@ using Microsoft.AspNetCore.Http;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Buffers;
-using Potok.Backend.Infrastructure.Security;
+using Potok.Backend.Gateway.Security;
 
 namespace Potok.Backend.Gateway.Controllers;
 

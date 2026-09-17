@@ -39,4 +39,20 @@ internal static class TestServiceCollectionFactory
             ValidateScopes = true
         });
     }
+
+    internal static ServiceProvider BuildSearchEngineDomainProvider()
+    {
+        var services = new ServiceCollection();
+        var configuration = CreateConfiguration();
+
+        services.AddSingleton(Log.Logger);
+        services.AddCoreInfrastructure(configuration);
+        services.AddSearchEngineServices(configuration);
+
+        return services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+    }
 }
