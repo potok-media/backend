@@ -1,45 +1,9 @@
 using Potok.Backend.Infrastructure.Configuration;
+using Potok.Backend.Infrastructure.Logging;
 using Potok.Backend.Infrastructure.Migrations.Configurations;
 using Serilog;
-using Serilog.Events;
-using Serilog.Sinks.SystemConsole.Themes;
 
-var cleanTheme = new AnsiConsoleTheme(new Dictionary<ConsoleThemeStyle, string>
-{
-    [ConsoleThemeStyle.Text] = "\x1b[37m",
-    [ConsoleThemeStyle.SecondaryText] = "\x1b[90m",
-    [ConsoleThemeStyle.TertiaryText] = "\x1b[90m",
-    [ConsoleThemeStyle.String] = "\x1b[32m",
-    [ConsoleThemeStyle.Number] = "\x1b[35m",
-    [ConsoleThemeStyle.Boolean] = "\x1b[36m",
-    [ConsoleThemeStyle.Scalar] = "\x1b[32m",
-    [ConsoleThemeStyle.LevelVerbose] = "\x1b[90m",
-    [ConsoleThemeStyle.LevelDebug] = "\x1b[90m",
-    [ConsoleThemeStyle.LevelInformation] = "\x1b[36m",
-    [ConsoleThemeStyle.LevelWarning] = "\x1b[33m",
-    [ConsoleThemeStyle.LevelError] = "\x1b[31m",
-    [ConsoleThemeStyle.LevelFatal] = "\x1b[31;1m",
-    [ConsoleThemeStyle.Name] = "\x1b[37m",
-    [ConsoleThemeStyle.Null] = "\x1b[90m",
-    [ConsoleThemeStyle.Invalid] = "\x1b[33m"
-});
-
-Log.Logger = new LoggerConfiguration()
-    //.MinimumLevel.Information()
-    //.MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
-    //.MinimumLevel.Override("System", LogEventLevel.Warning)
-    .Filter.ByExcluding(logEvent => 
-        logEvent.Properties.TryGetValue("RequestPath", out var path) && 
-        path.ToString().Contains("health") &&
-        logEvent.Properties.TryGetValue("StatusCode", out var status) &&
-        status is ScalarValue scalar && 
-        scalar.Value is int code && 
-        code < 500)
-    .Enrich.FromLogContext()
-    .WriteTo.Console(
-        theme: cleanTheme,
-        applyThemeToRedirectedOutput: true)
-    .CreateLogger();
+Log.Logger = SerilogSetup.CreateLogger();
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -99,18 +63,9 @@ app.UseForwardedHeaders(forwardedHeadersOptions);
 app.UseExceptionHandler();
 app.UseSerilogRequestLogging(options =>
 {
-    options.GetLevel = (httpContext, elapsedMs, ex) =>
-    {
-        if (ex != null) return Serilog.Events.LogEventLevel.Error;
-        if (httpContext.Request.Path.StartsWithSegments("/health") || 
-            httpContext.Request.Path.StartsWithSegments("/api/health"))
-        {
-            return httpContext.Response.StatusCode >= 500 
-                ? Serilog.Events.LogEventLevel.Error 
-                : Serilog.Events.LogEventLevel.Verbose;
-        }
-        return Serilog.Events.LogEventLevel.Information;
-    };
+    options.MessageTemplate = SerilogSetup.RequestMessageTemplate;
+    options.GetLevel = SerilogSetup.RequestLogLevel;
+    options.EnrichDiagnosticContext = SerilogSetup.EnrichRequest;
 });
 app.UseCors("AllowAll");
 app.UseWebSockets(new WebSocketOptions

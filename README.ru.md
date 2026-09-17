@@ -31,6 +31,19 @@ flowchart LR
     SE --> DB
 ```
 
+## Локальный стек из этого репозитория
+
+Собирает Gateway, SearchEngine, TorrentGo и web-клиент из Dockerfile в дереве (Postgres и FlareSolverr — публичные образы). Из **корня репозитория**:
+
+```bash
+docker compose -f docker-compose.local.yml up --build
+```
+
+- Web: http://localhost:3000 · Gateway: http://localhost:5000 · SearchEngine: http://localhost:6000 · TorrentGo: http://localhost:5282
+- Конфиг трекеров монтируется из `src/Potok.Backend.SearchEngine/config.yml`. Для локальных логинов смените том на `config.local.yml`.
+- Первая сборка TorrentGo компилирует ffmpeg из исходников и занимает время.
+- Не запускайте рядом с прод-compose с GHCR — имена контейнеров совпадут.
+
 ## Быстрый старт (Docker)
 
 Создайте в одной папке `docker-compose.yml`, `.env` и (для торрентов) `config.yml` — [вики, установка](https://potok.rip/wiki). Затем:
