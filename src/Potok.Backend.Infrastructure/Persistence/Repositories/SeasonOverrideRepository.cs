@@ -129,6 +129,41 @@ public class SeasonOverrideRepository : ISeasonOverrideRepository
         return DeserializeFiles(json);
     }
 
+    public async Task<IReadOnlyDictionary<string, TorrentOverrideSummary>> GetSummariesAsync(IReadOnlyCollection<string> hashes)
+    {
+        if (hashes is null || hashes.Count == 0)
+            return new Dictionary<string, TorrentOverrideSummary>();
+
+        var cleanHashes = hashes
+            .Where(h => !string.IsNullOrWhiteSpace(h))
+            .Select(h => h.ToLower())
+            .Distinct()
+            .ToArray();
+        if (cleanHashes.Length == 0)
+            return new Dictionary<string, TorrentOverrideSummary>();
+
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        var sql = $@"SELECT hash, season_map, file_map FROM {Schema}.torrent_overrides WHERE hash = ANY(@Hashes)";
+        var rows = await connection.QueryAsync<OverrideMapsRow>(sql, new { Hashes = cleanHashes });
+
+        var result = new Dictionary<string, TorrentOverrideSummary>();
+        foreach (var row in rows)
+        {
+            var summary = TorrentOverrideSummary.From(Deserialize(row.SeasonMap), DeserializeFiles(row.FileMap));
+            if (summary is null) continue;
+            result[row.Hash.ToLower()] = summary;
+        }
+        return result;
+    }
+
+    private sealed class OverrideMapsRow
+    {
+        public string Hash { get; init; } = "";
+        public string? SeasonMap { get; init; }
+        public string? FileMap { get; init; }
+    }
+
     private static Dictionary<string, SeasonOverrideEntry> Deserialize(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return new();

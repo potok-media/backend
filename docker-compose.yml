@@ -18,6 +18,7 @@ services:
       # Telegram login: set both to enable auth/registration via the Telegram Login Widget.
       - Gateway__TelegramBotToken=${GATEWAY_TELEGRAM_BOT_TOKEN:-}
       - Gateway__TelegramBotUsername=${GATEWAY_TELEGRAM_BOT_USERNAME:-}
+      - Gateway__TraktClientSecret=${GATEWAY_TRAKT_CLIENT_SECRET:-}
     depends_on:
       db:
         condition: service_healthy

@@ -14,6 +14,7 @@ public class GatewayCompositionTests
         Assert.NotNull(scope.ServiceProvider.GetService<IHomeService>());
         Assert.NotNull(scope.ServiceProvider.GetService<IMediaOrchestrator>());
         Assert.NotNull(scope.ServiceProvider.GetService<IUserRepository>());
+        Assert.NotNull(scope.ServiceProvider.GetService<ITraktTokenService>());
         Assert.NotNull(scope.ServiceProvider.GetService<ICacheService>());
     }
 

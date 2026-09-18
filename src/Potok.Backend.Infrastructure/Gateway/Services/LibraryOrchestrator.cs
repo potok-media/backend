@@ -157,14 +157,34 @@ public class LibraryOrchestrator : ILibraryOrchestrator
         var profileTask = _traktClient.GetUserProfileAsync(accessToken);
         var statsTask = _traktClient.GetUserStatsAsync(accessToken);
 
-        await Task.WhenAll(profileTask, statsTask);
-
-        var profile = await profileTask;
-        var stats = await statsTask;
+        TraktUserProfile? profile;
+        try
+        {
+            profile = await profileTask;
+        }
+        catch
+        {
+            try { await statsTask; } catch { /* observed */ }
+            throw;
+        }
 
         if (profile == null)
         {
             throw new Exception("Failed to retrieve Trakt profile");
+        }
+
+        TraktUserStats? stats;
+        try
+        {
+            stats = await statsTask;
+        }
+        catch (TraktUnauthorizedException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            stats = null;
         }
 
         var username = profile.Username;

@@ -15,6 +15,7 @@ public class TraktProxyController : ControllerBase
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly GatewayOptions _options;
     private readonly IUserRepository _userRepository;
+    private readonly ITraktTokenService _traktTokenService;
     private readonly ILogger _logger;
     private const string TraktApiBase = "https://api.trakt.tv";
 
@@ -22,11 +23,13 @@ public class TraktProxyController : ControllerBase
         IHttpClientFactory httpClientFactory,
         IOptions<GatewayOptions> options,
         IUserRepository userRepository,
+        ITraktTokenService traktTokenService,
         ILogger logger)
     {
         _httpClientFactory = httpClientFactory;
         _options = options.Value;
         _userRepository = userRepository;
+        _traktTokenService = traktTokenService;
         _logger = logger;
     }
 
@@ -52,10 +55,15 @@ public class TraktProxyController : ControllerBase
     public async Task<IActionResult> GetToken([FromBody] JsonElement body)
     {
         var client = CreateClient();
-        var payload = new {
-            code = body.GetProperty("code").GetString(),
-            client_id = _options.TraktClientId
+        var payload = new Dictionary<string, string?>
+        {
+            ["code"] = body.GetProperty("code").GetString(),
+            ["client_id"] = _options.TraktClientId
         };
+        if (!string.IsNullOrWhiteSpace(_options.TraktClientSecret))
+        {
+            payload["client_secret"] = _options.TraktClientSecret;
+        }
         var response = await client.PostAsJsonAsync($"{TraktApiBase}/oauth/device/token", payload);
         
         if (!response.IsSuccessStatusCode)
@@ -134,8 +142,7 @@ public class TraktProxyController : ControllerBase
         var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (!string.IsNullOrEmpty(userIdStr) && Guid.TryParse(userIdStr, out var userId))
         {
-            var token = await _userRepository.GetTraktTokenAsync(userId);
-            accessToken = token?.AccessToken;
+            accessToken = await _traktTokenService.GetValidAccessTokenAsync(userId);
         }
 
         if (!string.IsNullOrEmpty(accessToken))

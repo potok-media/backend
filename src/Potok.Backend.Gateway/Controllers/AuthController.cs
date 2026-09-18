@@ -17,18 +17,27 @@ public class AuthController : ControllerBase
     private readonly IUserRepository _userRepository;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IJwtTokenService _jwtTokenService;
+    private readonly ITraktTokenService _traktTokenService;
     private readonly IOptions<GatewayOptions> _options;
 
     public AuthController(
         IUserRepository userRepository,
         IPasswordHasher passwordHasher,
         IJwtTokenService jwtTokenService,
+        ITraktTokenService traktTokenService,
         IOptions<GatewayOptions> options)
     {
         _userRepository = userRepository;
         _passwordHasher = passwordHasher;
         _jwtTokenService = jwtTokenService;
+        _traktTokenService = traktTokenService;
         _options = options;
+    }
+
+    private async Task<bool> IsTraktConnectedAsync(Guid userId)
+    {
+        var accessToken = await _traktTokenService.GetValidAccessTokenAsync(userId);
+        return !string.IsNullOrEmpty(accessToken);
     }
 
     [AllowAnonymous]
@@ -83,9 +92,9 @@ public class AuthController : ControllerBase
         }
 
         var token = _jwtTokenService.GenerateToken(user.Id, user.Username);
-        var traktToken = await _userRepository.GetTraktTokenAsync(user.Id);
+        var traktConnected = await IsTraktConnectedAsync(user.Id);
 
-        return Ok(new { token, user = UserPayload.From(user, traktConnected: traktToken != null) });
+        return Ok(new { token, user = UserPayload.From(user, traktConnected) });
     }
 
     [HttpGet("me")]
@@ -103,9 +112,9 @@ public class AuthController : ControllerBase
             return NotFound(new { error = "USER_NOT_FOUND" });
         }
 
-        var traktToken = await _userRepository.GetTraktTokenAsync(userId);
+        var traktConnected = await IsTraktConnectedAsync(userId);
 
-        return Ok(UserPayload.From(user, traktConnected: traktToken != null));
+        return Ok(UserPayload.From(user, traktConnected));
     }
 
     [HttpPost("sync-strategy")]
@@ -200,8 +209,8 @@ public class AuthController : ControllerBase
         await _userRepository.SetCredentialsAsync(userId, username, _passwordHasher.HashPassword(request.Password));
 
         var updated = await _userRepository.GetByIdAsync(userId);
-        var traktToken = await _userRepository.GetTraktTokenAsync(userId);
-        return Ok(UserPayload.From(updated!, traktConnected: traktToken != null));
+        var traktConnected = await IsTraktConnectedAsync(userId);
+        return Ok(UserPayload.From(updated!, traktConnected));
     }
 }
 

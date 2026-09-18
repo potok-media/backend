@@ -24,6 +24,7 @@ public static class GatewayServiceExtensions
             .AddScoped<IHomeService, HomeService>()
             .AddScoped<IMediaOrchestrator, MediaOrchestrator>()
             .AddScoped<ILibraryOrchestrator, LibraryOrchestrator>()
+            .AddScoped<ITraktTokenService, TraktTokenService>()
             .AddTransient<TraktApiHandler>();
 
         services.AddSingleton<ICacheService, CacheService>();

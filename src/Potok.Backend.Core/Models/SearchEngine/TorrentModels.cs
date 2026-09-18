@@ -26,8 +26,36 @@ public record TorrentSearchResult(
     string? MagnetUri = null,
     string? Link = null,
     IEnumerable<TorrentTag>? Tags = null,
-    bool? Viewed = null
+    bool? Viewed = null,
+    TorrentOverrideSummary? Override = null
 );
+
+// Compact search-result badge. Omit (null) when both maps are empty. primary* only if season_map has exactly one key.
+public record TorrentOverrideSummary(
+    int SeasonCount,
+    int FileCount,
+    string? PrimarySource = null,
+    int? PrimarySeason = null,
+    int? PrimaryOffset = null)
+{
+    public static TorrentOverrideSummary? From(
+        IReadOnlyDictionary<string, SeasonOverrideEntry>? seasonMap,
+        IReadOnlyDictionary<string, FileOverrideEntry>? fileMap)
+    {
+        var seasonCount = seasonMap?.Count ?? 0;
+        var fileCount = fileMap?.Count ?? 0;
+        if (seasonCount == 0 && fileCount == 0)
+            return null;
+
+        if (seasonMap is { Count: 1 })
+        {
+            var (source, entry) = seasonMap.First();
+            return new TorrentOverrideSummary(seasonCount, fileCount, source, entry.Season, entry.Offset);
+        }
+
+        return new TorrentOverrideSummary(seasonCount, fileCount);
+    }
+}
 
 public record TorrentSearchResponse(IEnumerable<TorrentSearchResult> Results);
 

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
@@ -231,10 +232,18 @@ public class TraktClient
             {
                 var errorBody = await response.Content.ReadAsStringAsync();
                 _logger.Error("Failed Trakt request to {Path}: {StatusCode}. Body: {ErrorBody}", path, response.StatusCode, errorBody);
+                if (response.StatusCode == HttpStatusCode.Unauthorized)
+                {
+                    throw new TraktUnauthorizedException();
+                }
                 return default;
             }
 
             return await response.Content.ReadFromJsonAsync<T>();
+        }
+        catch (TraktUnauthorizedException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

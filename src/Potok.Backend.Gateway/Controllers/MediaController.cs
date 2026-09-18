@@ -16,18 +16,18 @@ public class MediaController : ControllerBase
     private readonly IHomeService _homeService;
     private readonly IMediaOrchestrator _orchestrator;
     private readonly ILogger _logger;
-    private readonly IUserRepository _userRepository;
+    private readonly ITraktTokenService _traktTokenService;
 
     public MediaController(
         IHomeService homeService,
         IMediaOrchestrator orchestrator,
         ILogger logger,
-        IUserRepository userRepository)
+        ITraktTokenService traktTokenService)
     {
         _homeService = homeService;
         _orchestrator = orchestrator;
         _logger = logger;
-        _userRepository = userRepository;
+        _traktTokenService = traktTokenService;
     }
 
     private string BaseUrl => $"{Request.Scheme}://{Request.Host}";
@@ -36,8 +36,7 @@ public class MediaController : ControllerBase
     {
         var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId)) return null;
-        var token = await _userRepository.GetTraktTokenAsync(userId);
-        return token?.AccessToken;
+        return await _traktTokenService.GetValidAccessTokenAsync(userId);
     }
 
     [HttpGet("home")]

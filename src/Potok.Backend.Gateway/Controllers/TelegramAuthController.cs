@@ -21,15 +21,18 @@ public class TelegramAuthController : ControllerBase
     private readonly ITelegramAuthService? _telegramAuthService;
     private readonly ITelegramLinkCodeStore? _linkCodeStore;
     private readonly IUserRepository _userRepository;
+    private readonly ITraktTokenService _traktTokenService;
     private readonly IOptions<GatewayOptions> _options;
 
     public TelegramAuthController(
         IUserRepository userRepository,
+        ITraktTokenService traktTokenService,
         IOptions<GatewayOptions> options,
         ITelegramAuthService? telegramAuthService = null,
         ITelegramLinkCodeStore? linkCodeStore = null)
     {
         _userRepository = userRepository;
+        _traktTokenService = traktTokenService;
         _options = options;
         _telegramAuthService = telegramAuthService;
         _linkCodeStore = linkCodeStore;
@@ -69,8 +72,8 @@ public class TelegramAuthController : ControllerBase
 
         var user = await _userRepository.GetByIdAsync(userId);
         if (user == null) return NotFound(new { error = "USER_NOT_FOUND" });
-        var traktToken = await _userRepository.GetTraktTokenAsync(userId);
-        return Ok(UserPayload.From(user, traktToken != null));
+        var accessToken = await _traktTokenService.GetValidAccessTokenAsync(userId);
+        return Ok(UserPayload.From(user, traktConnected: !string.IsNullOrEmpty(accessToken)));
     }
 
     // Deep-link (bot) flow, used on HTTP deployments where the widget can't run. Issues a one-time

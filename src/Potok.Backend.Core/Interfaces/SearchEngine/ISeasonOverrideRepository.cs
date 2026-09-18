@@ -15,4 +15,7 @@ public interface ISeasonOverrideRepository
     Task<Dictionary<string, FileOverrideEntry>> GetFileMapAsync(string hash);
     Task<Dictionary<string, FileOverrideEntry>> UpsertFileAsync(string hash, string fileId, FileOverrideEntry entry);
     Task<Dictionary<string, FileOverrideEntry>> RemoveFileAsync(string hash, string fileId);
+
+    // Compact search-result badge. One query; rows with empty maps are omitted. Empty/null hashes → no SQL.
+    Task<IReadOnlyDictionary<string, TorrentOverrideSummary>> GetSummariesAsync(IReadOnlyCollection<string> hashes);
 }

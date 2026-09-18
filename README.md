@@ -90,6 +90,7 @@ services:
       # Telegram login: set both to enable auth/registration via the Telegram Login Widget.
       - Gateway__TelegramBotToken=${GATEWAY_TELEGRAM_BOT_TOKEN:-}
       - Gateway__TelegramBotUsername=${GATEWAY_TELEGRAM_BOT_USERNAME:-}
+      - Gateway__TraktClientSecret=${GATEWAY_TRAKT_CLIENT_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -188,6 +189,7 @@ Set via `.env`. The DB connection string is assembled in `docker-compose.yml` fr
 | `GATEWAY_JWT_SECRET` | `Gateway__JwtSecret` | JWT signing secret (change in production) | change in production |
 | `GATEWAY_TELEGRAM_BOT_TOKEN` | `Gateway__TelegramBotToken` | Telegram bot token; enables Telegram login when set with the username below | — |
 | `GATEWAY_TELEGRAM_BOT_USERNAME` | `Gateway__TelegramBotUsername` | Telegram bot username (no `@`) for the login widget | — |
+| `GATEWAY_TRAKT_CLIENT_SECRET` | `Gateway__TraktClientSecret` | Trakt OAuth client secret (device-code exchange + token refresh); leave empty if unused | — |
 | `DB_HOST` / `DB_PORT` | connection string | PostgreSQL host/port (`db` = bundled) | `db` / `5432` |
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` | connection string + `db` service | Database credentials | `potok` / `potok` / — |
 | `GATEWAY_PORT` | `PORT` in gateway | Host publish port | `5000` |

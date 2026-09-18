@@ -22,16 +22,25 @@ public class TelegramAuthService : ITelegramAuthService
 
     private readonly IUserRepository _userRepository;
     private readonly IJwtTokenService _jwtTokenService;
+    private readonly ITraktTokenService _traktTokenService;
     private readonly GatewayOptions _options;
 
     public TelegramAuthService(
         IUserRepository userRepository,
         IJwtTokenService jwtTokenService,
+        ITraktTokenService traktTokenService,
         IOptions<GatewayOptions> options)
     {
         _userRepository = userRepository;
         _jwtTokenService = jwtTokenService;
+        _traktTokenService = traktTokenService;
         _options = options.Value;
+    }
+
+    private async Task<bool> IsTraktConnectedAsync(Guid userId)
+    {
+        var accessToken = await _traktTokenService.GetValidAccessTokenAsync(userId);
+        return !string.IsNullOrEmpty(accessToken);
     }
 
     public async Task<TelegramAuthResult> AuthenticateAsync(IReadOnlyDictionary<string, string> authData)
@@ -49,8 +58,8 @@ public class TelegramAuthService : ITelegramAuthService
         if (existing != null)
         {
             var token = _jwtTokenService.GenerateToken(existing.Id, existing.Username);
-            var traktToken = await _userRepository.GetTraktTokenAsync(existing.Id);
-            return TelegramAuthResult.Ok(token, existing, traktToken != null);
+            var traktConnected = await IsTraktConnectedAsync(existing.Id);
+            return TelegramAuthResult.Ok(token, existing, traktConnected);
         }
 
         if (!_options.MultiUserMode)
@@ -94,8 +103,8 @@ public class TelegramAuthService : ITelegramAuthService
         await _userRepository.LinkTelegramAsync(userId, telegramId, telegramUsername);
 
         var updated = await _userRepository.GetByIdAsync(userId);
-        var traktToken = await _userRepository.GetTraktTokenAsync(userId);
-        return TelegramAuthResult.Ok(token: null, updated!, traktToken != null);
+        var traktConnected = await IsTraktConnectedAsync(userId);
+        return TelegramAuthResult.Ok(token: null, updated!, traktConnected);
     }
 
     public Task UnlinkAsync(Guid userId) => _userRepository.UnlinkTelegramAsync(userId);

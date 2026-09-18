@@ -11,24 +11,35 @@ namespace Potok.Backend.Gateway.Controllers;
 public class LibraryController : ControllerBase
 {
     private readonly ILibraryOrchestrator _orchestrator;
+    private readonly ITraktTokenService _traktTokenService;
     private readonly IUserRepository _userRepository;
     private readonly ILogger _logger;
 
-    public LibraryController(ILibraryOrchestrator orchestrator, IUserRepository userRepository, ILogger logger)
+    public LibraryController(
+        ILibraryOrchestrator orchestrator,
+        ITraktTokenService traktTokenService,
+        IUserRepository userRepository,
+        ILogger logger)
     {
         _orchestrator = orchestrator;
+        _traktTokenService = traktTokenService;
         _userRepository = userRepository;
         _logger = logger;
     }
 
     private string BaseUrl => $"{Request.Scheme}://{Request.Host}";
 
-    private async Task<string?> GetTraktAccessTokenAsync()
+    private bool TryGetUserId(out Guid userId)
     {
+        userId = Guid.Empty;
         var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId)) return null;
-        var token = await _userRepository.GetTraktTokenAsync(userId);
-        return token?.AccessToken;
+        return !string.IsNullOrEmpty(userIdStr) && Guid.TryParse(userIdStr, out userId);
+    }
+
+    private async Task<string?> GetTraktAccessTokenAsync(bool forceRefresh = false)
+    {
+        if (!TryGetUserId(out var userId)) return null;
+        return await _traktTokenService.GetValidAccessTokenAsync(userId, forceRefresh);
     }
 
     [HttpGet("watchlist")]
@@ -54,7 +65,12 @@ public class LibraryController : ControllerBase
     [HttpGet("profile")]
     public async Task<IActionResult> GetProfile()
     {
-        var accessToken = await GetTraktAccessTokenAsync();
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized("Trakt not connected");
+        }
+
+        var accessToken = await _traktTokenService.GetValidAccessTokenAsync(userId);
         if (string.IsNullOrEmpty(accessToken))
         {
             _logger.Warning("Trakt access token not found for user when fetching user profile");
@@ -63,8 +79,25 @@ public class LibraryController : ControllerBase
 
         try
         {
-            var profile = await _orchestrator.GetUserProfileAsync(accessToken);
-            return Ok(profile);
+            return Ok(await _orchestrator.GetUserProfileAsync(accessToken));
+        }
+        catch (TraktUnauthorizedException)
+        {
+            var retried = await _traktTokenService.GetValidAccessTokenAsync(userId, forceRefresh: true);
+            if (string.IsNullOrEmpty(retried))
+            {
+                return Unauthorized("Trakt not connected");
+            }
+
+            try
+            {
+                return Ok(await _orchestrator.GetUserProfileAsync(retried));
+            }
+            catch (TraktUnauthorizedException)
+            {
+                await _userRepository.DeleteTraktTokenAsync(userId);
+                return Unauthorized("Trakt not connected");
+            }
         }
         catch (Exception ex)
         {
@@ -73,7 +106,7 @@ public class LibraryController : ControllerBase
         }
     }
 
-    private async Task<IActionResult> GetLibraryItems(string key, Func<string, string, Task<IEnumerable<MediaCard>>> fetchFunc)
+    private async Task<IActionResult> GetLibraryItems(string _, Func<string, string, Task<IEnumerable<MediaCard>>> fetchFunc)
     {
         var accessToken = await GetTraktAccessTokenAsync();
         if (string.IsNullOrEmpty(accessToken))
@@ -82,7 +115,14 @@ public class LibraryController : ControllerBase
             return Unauthorized("Trakt not connected");
         }
 
-        var results = await fetchFunc(accessToken, BaseUrl);
-        return Ok(results ?? Enumerable.Empty<MediaCard>());
+        try
+        {
+            var results = await fetchFunc(accessToken, BaseUrl);
+            return Ok(results ?? Enumerable.Empty<MediaCard>());
+        }
+        catch (TraktUnauthorizedException)
+        {
+            return Unauthorized("Trakt not connected");
+        }
     }
 }

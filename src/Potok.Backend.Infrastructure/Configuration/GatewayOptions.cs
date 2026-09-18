@@ -5,7 +5,8 @@ public record GatewayOptions
     // Shared default TMDB v3 key so a fresh deploy works out of the box. Override via
     // env Gateway__TmdbApiKey (or GATEWAY_TMDB_API_KEY / TMDB_API_KEY through compose).
     public string TmdbApiKey { get; init; } = "2c4fa42c601c29b6fea7ad9b211c46f0";
-    public string TraktClientId => "4346fe9c0e77439601db138d95c10f63a52e1edbf160f1c70407e1daaa11dadf";
+    public string TraktClientId { get; init; } = "4346fe9c0e77439601db138d95c10f63a52e1edbf160f1c70407e1daaa11dadf";
+    public string? TraktClientSecret { get; init; }
 
     public bool MultiUserMode { get; init; } = false;
     public string JwtSecret { get; init; } = "default-fallback-gateway-jwt-secret-key-32-chars-long";

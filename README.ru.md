@@ -86,6 +86,7 @@ services:
       - Gateway__TmdbApiKey=${GATEWAY_TMDB_API_KEY:-${TMDB_API_KEY:-2c4fa42c601c29b6fea7ad9b211c46f0}}
       - Gateway__MultiUserMode=${GATEWAY_MULTI_USER_MODE:-false}
       - Gateway__JwtSecret=${GATEWAY_JWT_SECRET:-default-fallback-gateway-jwt-secret-key-32-chars-long}
+      - Gateway__TraktClientSecret=${GATEWAY_TRAKT_CLIENT_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -181,6 +182,7 @@ volumes:
 | `GATEWAY_TMDB_API_KEY` | `Gateway__TmdbApiKey` | Ключ TMDB API — необязательно; принимает и `TMDB_API_KEY`, при отсутствии используется общий дефолт | встроенный |
 | `GATEWAY_MULTI_USER_MODE` | `Gateway__MultiUserMode` | Саморегистрация пользователей | `false` |
 | `GATEWAY_JWT_SECRET` | `Gateway__JwtSecret` | Секрет JWT (смените в продакшене) | смените в продакшене |
+| `GATEWAY_TRAKT_CLIENT_SECRET` | `Gateway__TraktClientSecret` | Секрет OAuth-клиента Trakt (обмен device-code и refresh токена); можно оставить пустым | — |
 | `DB_HOST` / `DB_PORT` | строка подключения | Хост/порт PostgreSQL (`db` = встроенный) | `db` / `5432` |
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` | строка подключения + сервис `db` | Доступы к БД | `potok` / `potok` / — |
 | `GATEWAY_PORT` | `PORT` в gateway | Порт публикации на хосте | `5000` |
