@@ -120,3 +120,26 @@ public record TorrentOverrideMap(
 public record UpsertSeasonOverrideRequest(int? SourceSeason, int TargetSeason, int Offset);
 
 public record UpsertFileOverrideRequest(string FileId, int Season, int Episode, string Mode);
+
+// Continue-watching cursor for a title on this SearchEngine instance. One row per (mediaType, tmdbId).
+// `Stream` is the opaque torrent payload the plugin needs to POST /api/torrents again.
+public record TorrentContinueCursor(
+    string MediaType,
+    long TmdbId,
+    string Title,
+    string FileIndex,
+    int ProgressSeconds,
+    int DurationSeconds,
+    string? PosterSrc = null,
+    string? BackdropSrc = null,
+    string? StillSrc = null,
+    int? Season = null,
+    int? Episode = null,
+    string? AudioName = null,
+    string? InfoHash = null,
+    object? Stream = null,
+    DateTimeOffset? UpdatedAt = null);
+
+public record TorrentContinueListResponse(IEnumerable<TorrentContinueCursor> Items);
+
+public record TorrentContinueRemoveRequest(string MediaType, long TmdbId);

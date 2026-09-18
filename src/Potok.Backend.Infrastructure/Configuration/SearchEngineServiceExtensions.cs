@@ -2,6 +2,7 @@ using Dapper;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Potok.Backend.Core.Interfaces.Gateway;
+using Potok.Backend.Core.Interfaces.SearchEngine;
 using Potok.Backend.Core.Models.SearchEngine.Options;
 using Potok.Backend.Infrastructure.Http;
 using Potok.Backend.Infrastructure.Http.FlareSolverr;
@@ -32,6 +33,7 @@ public static class SearchEngineServiceExtensions
             .AddScoped<IQueriesRepository, QueriesRepository>()
             .AddScoped<ISubscriptionRepository, SubscriptionRepository>()
             .AddScoped<ISeasonOverrideRepository, SeasonOverrideRepository>()
+            .AddScoped<IContinueWatchingRepository, ContinueWatchingRepository>()
             .AddScoped<ITorrentEnricher, TorrentEnricher>()
             .AddScoped<ILocalSearchService, LocalSearchService>()
             .AddScoped<ITorrentMediaProbeService, TorrentMediaProbeService>()
