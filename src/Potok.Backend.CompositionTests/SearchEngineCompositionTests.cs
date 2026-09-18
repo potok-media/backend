@@ -18,6 +18,7 @@ public class SearchEngineCompositionTests
         Assert.NotNull(scope.ServiceProvider.GetService<ISeasonOverrideRepository>());
         Assert.NotNull(scope.ServiceProvider.GetService<IContinueWatchingRepository>());
         Assert.NotNull(scope.ServiceProvider.GetService<TrackerHttpClient>());
+        Assert.NotNull(scope.ServiceProvider.GetService<TrackerProxyPool>());
         Assert.NotNull(scope.ServiceProvider.GetService<IFlareSolverrClient>());
         Assert.NotNull(scope.ServiceProvider.GetService<CloudflareGuard>());
     }

@@ -53,7 +53,7 @@ public class CloudflareGuardTests
     }
 
     [Fact]
-    public void IsGuarded_AfterRecheckWindow_AllowsProbe()
+    public void IsGuarded_AfterRecheckWindow_StaysOnBrowser()
     {
         var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var settings = EnabledSettings();
@@ -62,7 +62,6 @@ public class CloudflareGuardTests
 
         guard.MarkGuarded("rutracker.org");
         now = now.AddMinutes(31);
-        Assert.False(guard.IsGuarded("rutracker.org"));
         Assert.True(guard.IsGuarded("rutracker.org"));
     }
 

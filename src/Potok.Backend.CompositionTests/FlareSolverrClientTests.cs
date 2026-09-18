@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Potok.Backend.Core.Models.SearchEngine.Options;
+using Potok.Backend.Infrastructure.Http;
 using Potok.Backend.Infrastructure.Http.FlareSolverr;
 
 namespace Potok.Backend.CompositionTests;
@@ -42,11 +43,110 @@ public class FlareSolverrClientTests
         using var create = JsonDocument.Parse(handler.Bodies[0]);
         Assert.Equal("sessions.create", create.RootElement.GetProperty("cmd").GetString());
         Assert.Equal("potok", create.RootElement.GetProperty("session").GetString());
+        Assert.False(create.RootElement.TryGetProperty("proxy", out _));
 
         using var get = JsonDocument.Parse(handler.Bodies[1]);
         Assert.Equal("request.get", get.RootElement.GetProperty("cmd").GetString());
         Assert.Equal("https://rutracker.org/forum/index.php", get.RootElement.GetProperty("url").GetString());
         Assert.Equal("bb_session", get.RootElement.GetProperty("cookies")[0].GetProperty("name").GetString());
+        Assert.False(get.RootElement.TryGetProperty("proxy", out _));
+    }
+
+    [Fact]
+    public async Task GetAsync_AttachesStickyPoolProxyToSessionAndRequest()
+    {
+        var handler = new QueueHandler([
+            JsonOk("""{"status":"ok","message":"Session created"}"""),
+            JsonOk("""{"status":"ok","solution":{"status":200,"response":"<html>ok</html>","cookies":[]}}""")
+        ]);
+
+        var config = EnabledConfig();
+        config.Proxy.List.Add("http://u:s@p1.example:8080");
+        config.Proxy.List.Add("http://p2.example:8080");
+
+        using var client = CreateClient(handler, config);
+        var solution = await client.GetAsync(
+            "https://rutracker.org/",
+            cookieHeader: null,
+            proxy: null,
+            CancellationToken.None);
+
+        Assert.NotNull(solution);
+        Assert.Equal(2, handler.Bodies.Count);
+
+        using var create = JsonDocument.Parse(handler.Bodies[0]);
+        var createProxy = create.RootElement.GetProperty("proxy");
+        Assert.Equal("http://p1.example:8080", createProxy.GetProperty("url").GetString());
+        Assert.Equal("u", createProxy.GetProperty("username").GetString());
+
+        using var get = JsonDocument.Parse(handler.Bodies[1]);
+        Assert.Equal("http://p1.example:8080", get.RootElement.GetProperty("proxy").GetProperty("url").GetString());
+    }
+
+    [Fact]
+    public async Task GetAsync_SessionFailure_RecreatesWithNextProxy()
+    {
+        var handler = new QueueHandler([
+            JsonOk("""{"status":"ok","message":"Session created"}"""),
+            JsonOk("""{"status":"error","message":"Unable to find session"}"""),
+            JsonOk("""{"status":"ok","message":"Session created"}"""),
+            JsonOk("""{"status":"ok","solution":{"status":200,"response":"<html>retry</html>","cookies":[]}}""")
+        ]);
+
+        var config = EnabledConfig();
+        config.Proxy.List.Add("http://p1.example:8080");
+        config.Proxy.List.Add("http://p2.example:8080");
+
+        using var client = CreateClient(handler, config);
+        var solution = await client.GetAsync(
+            "https://rutracker.org/",
+            cookieHeader: null,
+            proxy: null,
+            CancellationToken.None);
+
+        Assert.NotNull(solution);
+        Assert.Equal("<html>retry</html>", solution.Html);
+        Assert.Equal(4, handler.Bodies.Count);
+
+        using var firstCreate = JsonDocument.Parse(handler.Bodies[0]);
+        Assert.Equal("sessions.create", firstCreate.RootElement.GetProperty("cmd").GetString());
+        Assert.Equal("http://p1.example:8080", firstCreate.RootElement.GetProperty("proxy").GetProperty("url").GetString());
+
+        using var failedGet = JsonDocument.Parse(handler.Bodies[1]);
+        Assert.Equal("request.get", failedGet.RootElement.GetProperty("cmd").GetString());
+        Assert.Equal("http://p1.example:8080", failedGet.RootElement.GetProperty("proxy").GetProperty("url").GetString());
+
+        using var secondCreate = JsonDocument.Parse(handler.Bodies[2]);
+        Assert.Equal("sessions.create", secondCreate.RootElement.GetProperty("cmd").GetString());
+        Assert.Equal("http://p2.example:8080", secondCreate.RootElement.GetProperty("proxy").GetProperty("url").GetString());
+
+        using var retryGet = JsonDocument.Parse(handler.Bodies[3]);
+        Assert.Equal("http://p2.example:8080", retryGet.RootElement.GetProperty("proxy").GetProperty("url").GetString());
+    }
+
+    [Fact]
+    public async Task EnsureSessionAsync_StartsBrowserBeforeFirstFetch()
+    {
+        var handler = new QueueHandler([
+            JsonOk("""{"status":"ok","message":"Session created"}"""),
+            JsonOk("""{"status":"ok","solution":{"status":200,"response":"<html>ok</html>","cookies":[]}}""")
+        ]);
+
+        using var client = CreateClient(handler);
+        Assert.True(await client.EnsureSessionAsync(CancellationToken.None));
+
+        var solution = await client.GetAsync(
+            "https://rutracker.org/",
+            cookieHeader: null,
+            proxy: null,
+            CancellationToken.None);
+
+        Assert.NotNull(solution);
+        Assert.Equal(2, handler.Bodies.Count);
+        using var create = JsonDocument.Parse(handler.Bodies[0]);
+        Assert.Equal("sessions.create", create.RootElement.GetProperty("cmd").GetString());
+        using var get = JsonDocument.Parse(handler.Bodies[1]);
+        Assert.Equal("request.get", get.RootElement.GetProperty("cmd").GetString());
     }
 
     [Fact]
@@ -63,7 +163,22 @@ public class FlareSolverrClientTests
 
     private static FlareSolverrClient CreateClient(QueueHandler handler, bool enabled = true)
     {
-        var config = new Config
+        return CreateClient(handler, EnabledConfig(enabled));
+    }
+
+    private static FlareSolverrClient CreateClient(QueueHandler handler, Config config)
+    {
+        var monitor = new StaticOptionsMonitor<Config>(config);
+        return new FlareSolverrClient(
+            new SingleClientFactory(new HttpClient(handler)),
+            monitor,
+            new TrackerProxyPool(monitor),
+            NullLogger<FlareSolverrClient>.Instance);
+    }
+
+    private static Config EnabledConfig(bool enabled = true)
+    {
+        return new Config
         {
             FlareSolverr = new FlareSolverrSettings
             {
@@ -73,11 +188,6 @@ public class FlareSolverrClientTests
                 SessionIdleMinutes = 0
             }
         };
-
-        return new FlareSolverrClient(
-            new SingleClientFactory(new HttpClient(handler)),
-            new StaticOptionsMonitor<Config>(config),
-            NullLogger<FlareSolverrClient>.Instance);
     }
 
     private static HttpResponseMessage JsonOk(string json)

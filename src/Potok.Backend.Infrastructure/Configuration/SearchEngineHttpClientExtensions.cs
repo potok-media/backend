@@ -1,7 +1,6 @@
 using System.Net;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
-using Potok.Backend.Core.Models.SearchEngine.Options;
+using Potok.Backend.Infrastructure.Http;
 using Potok.Backend.Infrastructure.Http.FlareSolverr;
 
 namespace Potok.Backend.Infrastructure.Configuration;
@@ -47,22 +46,9 @@ public static class SearchEngineHttpClientExtensions
         IWebProxy? proxy = null;
         if (useProxy)
         {
-            var config = serviceProvider.GetRequiredService<IOptionsMonitor<Config>>().CurrentValue;
-            if (config.Proxy?.List?.Count > 0)
-            {
-                var proxyItem = config.Proxy.List[Random.Shared.Next(config.Proxy.List.Count)];
-                proxy = new WebProxy(proxyItem.Url);
-
-                if (!string.IsNullOrEmpty(proxyItem.Username))
-                {
-                    proxy.Credentials = new NetworkCredential(proxyItem.Username, proxyItem.Password);
-                }
-
-                if (proxy is WebProxy webProxy)
-                {
-                    webProxy.BypassProxyOnLocal = config.Proxy.BypassOnLocal;
-                }
-            }
+            var pool = serviceProvider.GetRequiredService<TrackerProxyPool>();
+            if (pool.HasProxies)
+                proxy = new RotatingWebProxy(pool);
         }
 
         return HttpClientSetup.CreateHandler(allowAutoRedirect, proxy);

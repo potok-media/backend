@@ -52,6 +52,7 @@ public static class SearchEngineServiceExtensions
             .AddScoped<ITrackerRefreshProvider, RuTrackerPopularService>();
 
         services.AddSingleton<ICacheService, CacheService>();
+        services.AddSingleton<TrackerProxyPool>();
         services.AddSingleton<CloudflareGuard>();
         services.AddSingleton<IFlareSolverrClient, FlareSolverrClient>();
         services.AddScoped<TrackerHttpClient>();

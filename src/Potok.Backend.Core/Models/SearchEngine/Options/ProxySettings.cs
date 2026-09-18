@@ -1,42 +1,59 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 
 namespace Potok.Backend.Core.Models.SearchEngine.Options;
 
 /// <summary>
-///     Настройки прокси-серверов.
+/// HTTP/SOCKS proxies for tracker egress.
 /// </summary>
 public class ProxySettings
 {
-    /// <summary>
-    ///     Игнорировать прокси для локальных адресов.
-    /// </summary>
     [ConfigurationKeyName("bypass-on-local")]
     public bool BypassOnLocal { get; set; }
 
     /// <summary>
-    ///     Список прокси-серверов.
+    /// Full proxy URLs, credentials in the URI:
+    /// <c>socks5://user:pass@host:port</c> or <c>http://host:8080</c>.
     /// </summary>
     [ConfigurationKeyName("list")]
-    public List<ProxyItem> List { get; set; } = [];
+    public List<string> List { get; set; } = [];
 }
 
-public class ProxyItem
+public sealed record ProxyEndpoint(string Url, string? Username, string? Password)
 {
-    /// <summary>
-    ///     Адрес прокси-сервера (например, "http://proxy:8080").
-    /// </summary>
-    [ConfigurationKeyName("url")]
-    public string Url { get; set; } = null!;
+    public Uri? ProxyUri => Uri.TryCreate(Url, UriKind.Absolute, out var uri) ? uri : null;
 
-    /// <summary>
-    ///     Имя пользователя для авторизации.
-    /// </summary>
-    [ConfigurationKeyName("username")]
-    public string? Username { get; set; }
+    public static ProxyEndpoint? TryParse(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw) || !Uri.TryCreate(raw.Trim(), UriKind.Absolute, out var uri))
+            return null;
 
-    /// <summary>
-    ///     Пароль для авторизации.
-    /// </summary>
-    [ConfigurationKeyName("password")]
-    public string? Password { get; set; }
+        var scheme = uri.Scheme;
+        if (scheme is not ("http" or "https" or "socks4" or "socks5"))
+            return null;
+        if (string.IsNullOrWhiteSpace(uri.Host))
+            return null;
+
+        string? user = null;
+        string? pass = null;
+        if (!string.IsNullOrEmpty(uri.UserInfo))
+        {
+            var cut = uri.UserInfo.IndexOf(':');
+            if (cut < 0)
+            {
+                user = Uri.UnescapeDataString(uri.UserInfo);
+            }
+            else
+            {
+                user = Uri.UnescapeDataString(uri.UserInfo[..cut]);
+                pass = Uri.UnescapeDataString(uri.UserInfo[(cut + 1)..]);
+            }
+        }
+
+        var port = uri.Port > 0 ? $":{uri.Port}" : "";
+        var url = $"{scheme}://{uri.Host}{port}";
+        return new ProxyEndpoint(
+            url,
+            string.IsNullOrEmpty(user) ? null : user,
+            string.IsNullOrEmpty(user) ? null : pass ?? "");
+    }
 }

@@ -43,12 +43,6 @@ public sealed class CloudflareGuard
             return false;
         }
 
-        if (now > state.LastProbe.AddMinutes(settings.RecheckMinutes))
-        {
-            state.LastProbe = now;
-            return false;
-        }
-
         return true;
     }
 
@@ -62,13 +56,12 @@ public sealed class CloudflareGuard
             host,
             _ =>
             {
-                _logger.LogWarning("{Host} is behind a Cloudflare challenge; switching to the browser", host);
-                return new GuardState { Since = now, LastProbe = now };
+                _logger.LogInformation("{Host} is behind a Cloudflare challenge; using the browser", host);
+                return new GuardState { Since = now };
             },
             (_, state) =>
             {
                 state.Since = now;
-                state.LastProbe = now;
                 return state;
             });
     }
@@ -85,6 +78,5 @@ public sealed class CloudflareGuard
     private sealed class GuardState
     {
         public DateTime Since;
-        public DateTime LastProbe;
     }
 }

@@ -66,6 +66,11 @@ public sealed class CloudflareWarmupHostedService : BackgroundService
             urls = CloudflareWarmup.ProbeUrls(trackers, _config.CurrentValue);
         }
 
+        _logger.LogInformation("Cloudflare warmup: {Count} tracker origin(s)", urls.Count);
+
+        if (!await _flareSolverr.EnsureSessionAsync(ct))
+            _logger.LogWarning("FlareSolverr session was not ready before warmup probes");
+
         foreach (var url in urls)
         {
             if (ct.IsCancellationRequested)
@@ -123,14 +128,21 @@ public sealed class CloudflareWarmupHostedService : BackgroundService
             if (CloudflareChallenge.IsChallenge(response))
                 return true;
 
-            if (response.IsSuccessStatusCode)
-                return false;
+            string? body = null;
+            try
+            {
+                body = await response.Content.ReadAsStringAsync(cts.Token);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not read warmup body from {Url}", url);
+            }
+
+            if (CloudflareChallenge.IsChallengeBody(body))
+                return true;
 
             if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.ServiceUnavailable)
-            {
-                var body = await response.Content.ReadAsStringAsync(cts.Token);
-                return CloudflareChallenge.IsChallengeBody(body);
-            }
+                return true;
 
             return false;
         }

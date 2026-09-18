@@ -108,14 +108,13 @@ public class TrackerHttpClient
     {
         var host = TryGetHost(url);
         var flareEnabled = _config.CurrentValue.FlareSolverr.IsConfigured;
-        var proxy = ResolveFlareProxy();
         string? postData = null;
         if (method == HttpMethod.Post && content is not null && flareEnabled)
             postData = await content.ReadAsStringAsync(ct);
 
         if (flareEnabled && host is not null && _guard.IsGuarded(host))
         {
-            var viaBrowser = await FetchViaFlareSolverrAsync(method, url, postData, cookie, proxy, ct);
+            var viaBrowser = await FetchViaFlareSolverrAsync(method, url, postData, cookie, ct);
             if (viaBrowser is not null)
                 return viaBrowser;
 
@@ -125,11 +124,7 @@ public class TrackerHttpClient
         var response = await SendDirectAsync(method, url, content, cookie, referer, useProxy, allowRedirect, ct);
 
         if (response.IsSuccessStatusCode)
-        {
-            if (host is not null)
-                _guard.Unguard(host);
             return response;
-        }
 
         if (!flareEnabled || host is null)
             return response;
@@ -151,7 +146,7 @@ public class TrackerHttpClient
         if (!challenge)
             return response;
 
-        var solved = await FetchViaFlareSolverrAsync(method, url, postData, cookie, proxy, ct);
+        var solved = await FetchViaFlareSolverrAsync(method, url, postData, cookie, ct);
         if (solved is null)
             return response;
 
@@ -191,36 +186,22 @@ public class TrackerHttpClient
         string url,
         string? postData,
         string? cookie,
-        FlareSolverrProxy? proxy,
         CancellationToken ct)
     {
         FlareSolverrSolution? solution;
         if (method == HttpMethod.Post)
         {
-            solution = await _flareSolverr.PostAsync(url, postData, cookie, proxy, ct);
+            solution = await _flareSolverr.PostAsync(url, postData, cookie, proxy: null, ct);
         }
         else
         {
-            solution = await _flareSolverr.GetAsync(url, cookie, proxy, ct);
+            solution = await _flareSolverr.GetAsync(url, cookie, proxy: null, ct);
         }
 
         if (solution is null)
             return null;
 
         return SynthesizeResponse(url, (HttpStatusCode)solution.Status, solution.Html, solution.Cookies);
-    }
-
-    private FlareSolverrProxy? ResolveFlareProxy()
-    {
-        var list = _config.CurrentValue.Proxy.List;
-        if (list is not { Count: > 0 })
-            return null;
-
-        var item = list[0];
-        if (string.IsNullOrWhiteSpace(item.Url))
-            return null;
-
-        return new FlareSolverrProxy(item.Url, item.Username, item.Password);
     }
 
     internal static HttpResponseMessage SynthesizeResponse(

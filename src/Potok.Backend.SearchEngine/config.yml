@@ -24,14 +24,14 @@ ffprobe:
     login: ''
     password: ''
 
-# HTTP proxies for tracker requests. list: [] — direct connection. Random pick from list.
-# Item: url (required), username/password — if the proxy needs auth.
+# HTTP/SOCKS proxies for tracker requests. list: [] — home IP (trackers can ban it).
+# Full URLs, credentials in the URI. Several URLs: round-robin per request.
+# Cloudflare (FlareSolverr) pins one IP for the browser session.
 proxy:
   bypass-on-local: false
   list:
-    - url: 'http://proxy.example.com:8080'
-      username: ''
-      password: ''
+    - 'socks5://user:pass@proxy.example.com:1080'
+    - 'http://proxy.example.com:8080'
 
 # Cloudflare bypass via FlareSolverr (headless Chrome next to SearchEngine).
 flaresolverr:

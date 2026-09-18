@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Potok.Backend.Infrastructure.Http;
 
 namespace Potok.Backend.Infrastructure.Http.FlareSolverr;
 
@@ -19,6 +20,7 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IOptionsMonitor<Config> _config;
+    private readonly TrackerProxyPool _pool;
     private readonly ILogger<FlareSolverrClient> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
@@ -30,10 +32,12 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
     public FlareSolverrClient(
         IHttpClientFactory httpClientFactory,
         IOptionsMonitor<Config> config,
+        TrackerProxyPool pool,
         ILogger<FlareSolverrClient> logger)
     {
         _httpClientFactory = httpClientFactory;
         _config = config;
+        _pool = pool;
         _logger = logger;
     }
 
@@ -62,6 +66,33 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
         return solution is not null && !string.IsNullOrWhiteSpace(solution.Html);
     }
 
+    public async Task<bool> EnsureSessionAsync(CancellationToken ct)
+    {
+        var settings = _config.CurrentValue.FlareSolverr;
+        if (!settings.IsConfigured)
+            return false;
+
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_sessionAlive)
+                return true;
+
+            var ok = await CreateSessionAsync(settings, _pool.StickyFlareProxy(), ct);
+            if (ok)
+            {
+                _lastUse = DateTime.UtcNow;
+                ArmIdleTimer(settings);
+            }
+
+            return ok;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     private async Task<FlareSolverrSolution?> ExecuteAsync(
         string cmd,
         string url,
@@ -87,18 +118,21 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
         await _gate.WaitAsync(ct);
         try
         {
-            if (!_sessionAlive && !await CreateSessionAsync(settings, ct))
+            var egress = proxy ?? _pool.StickyFlareProxy();
+
+            if (!_sessionAlive && !await CreateSessionAsync(settings, egress, ct))
                 return null;
 
-            var (outcome, solution) = await RequestAsync(settings, cmd, url, postData, cookieHeader, proxy, ct);
+            var (outcome, solution) = await RequestAsync(settings, cmd, url, postData, cookieHeader, egress, ct);
 
             if (outcome == FetchOutcome.BrowserFailed)
             {
                 await DestroySessionAsync(settings, ct);
-                if (!await CreateSessionAsync(settings, ct))
+                egress = proxy ?? _pool.StickyFlareProxy();
+                if (!await CreateSessionAsync(settings, egress, ct))
                     return null;
 
-                (outcome, solution) = await RequestAsync(settings, cmd, url, postData, cookieHeader, proxy, ct);
+                (outcome, solution) = await RequestAsync(settings, cmd, url, postData, cookieHeader, egress, ct);
                 if (outcome == FetchOutcome.Ok)
                     _logger.LogWarning("{Host}: FlareSolverr succeeded after recreating the session", host);
             }
@@ -168,11 +202,19 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
         return (FetchOutcome.Ok, new FlareSolverrSolution(solution?.Status ?? 0, solution?.Response, cookies));
     }
 
-    private async Task<bool> CreateSessionAsync(FlareSolverrSettings settings, CancellationToken ct)
+    private async Task<bool> CreateSessionAsync(
+        FlareSolverrSettings settings,
+        FlareSolverrProxy? proxy,
+        CancellationToken ct)
     {
         var root = await CallAsync(
             settings,
-            new FlareSolverrRequest { Cmd = "sessions.create", Session = SessionName },
+            new FlareSolverrRequest
+            {
+                Cmd = "sessions.create",
+                Session = SessionName,
+                Proxy = ToProxyDto(proxy)
+            },
             settings.MaxTimeoutMs + 30_000,
             ct);
 
@@ -182,24 +224,39 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
 
         _sessionAlive = ok;
         if (ok)
-            _logger.LogInformation("FlareSolverr browser session created");
+        {
+            if (proxy is not null)
+                _logger.LogInformation("FlareSolverr browser session created via {Proxy}", proxy.Url);
+            else
+                _logger.LogInformation("FlareSolverr browser session created");
+        }
         else
+        {
+            _pool.ClearSticky();
             _logger.LogError("FlareSolverr session create failed: {Message}", root?.Message);
+        }
 
         return ok;
     }
 
     private async Task DestroySessionAsync(FlareSolverrSettings settings, CancellationToken ct)
     {
-        if (!_sessionAlive)
-            return;
-
-        await CallAsync(
-            settings,
-            new FlareSolverrRequest { Cmd = "sessions.destroy", Session = SessionName },
-            60_000,
-            ct);
-        _sessionAlive = false;
+        try
+        {
+            if (_sessionAlive)
+            {
+                await CallAsync(
+                    settings,
+                    new FlareSolverrRequest { Cmd = "sessions.destroy", Session = SessionName },
+                    60_000,
+                    ct);
+            }
+        }
+        finally
+        {
+            _sessionAlive = false;
+            _pool.ClearSticky();
+        }
     }
 
     private void ArmIdleTimer(FlareSolverrSettings settings)

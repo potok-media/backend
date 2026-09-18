@@ -16,4 +16,6 @@ public interface IFlareSolverrClient
         CancellationToken ct);
 
     Task<bool> WarmupAsync(string url, CancellationToken ct);
+
+    Task<bool> EnsureSessionAsync(CancellationToken ct);
 }

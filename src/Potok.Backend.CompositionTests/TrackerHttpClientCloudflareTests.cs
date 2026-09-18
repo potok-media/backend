@@ -244,5 +244,7 @@ public class TrackerHttpClientCloudflareTests
         }
 
         public Task<bool> WarmupAsync(string url, CancellationToken ct) => Task.FromResult(true);
+
+        public Task<bool> EnsureSessionAsync(CancellationToken ct) => Task.FromResult(true);
     }
 }
