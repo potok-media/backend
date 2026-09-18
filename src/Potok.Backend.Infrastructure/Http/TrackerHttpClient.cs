@@ -13,10 +13,13 @@ public class TrackerHttpClient
 
     internal const string BrowserFetchedHeader = "X-Potok-Browser";
 
+    private const int ProxyAttempts = 3;
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IOptionsMonitor<Config> _config;
     private readonly CloudflareGuard _guard;
     private readonly IFlareSolverrClient _flareSolverr;
+    private readonly TrackerProxyPool _pool;
     private readonly ILogger<TrackerHttpClient> _logger;
 
     public TrackerHttpClient(
@@ -24,12 +27,14 @@ public class TrackerHttpClient
         IOptionsMonitor<Config> config,
         CloudflareGuard guard,
         IFlareSolverrClient flareSolverr,
+        TrackerProxyPool pool,
         ILogger<TrackerHttpClient> logger)
     {
         _httpClientFactory = httpClientFactory;
         _config = config;
         _guard = guard;
         _flareSolverr = flareSolverr;
+        _pool = pool;
         _logger = logger;
     }
 
@@ -109,8 +114,12 @@ public class TrackerHttpClient
         var host = TryGetHost(url);
         var flareEnabled = _config.CurrentValue.FlareSolverr.IsConfigured;
         string? postData = null;
-        if (method == HttpMethod.Post && content is not null && flareEnabled)
+        string mediaType = "application/x-www-form-urlencoded";
+        if (content is not null)
+        {
             postData = await content.ReadAsStringAsync(ct);
+            mediaType = content.Headers.ContentType?.MediaType ?? mediaType;
+        }
 
         if (flareEnabled && host is not null && _guard.IsGuarded(host))
         {
@@ -121,7 +130,8 @@ public class TrackerHttpClient
             return SynthesizeResponse(url, HttpStatusCode.InternalServerError, html: null, cookies: []);
         }
 
-        var response = await SendDirectAsync(method, url, content, cookie, referer, useProxy, allowRedirect, ct);
+        var response = await SendDirectWithRetriesAsync(
+            method, url, postData, mediaType, cookie, referer, useProxy, allowRedirect, host, ct);
 
         if (response.IsSuccessStatusCode)
             return response;
@@ -155,10 +165,63 @@ public class TrackerHttpClient
         return solved;
     }
 
-    private async Task<HttpResponseMessage> SendDirectAsync(
+    private async Task<HttpResponseMessage> SendDirectWithRetriesAsync(
         HttpMethod method,
         string url,
-        HttpContent? content,
+        string? postBody,
+        string mediaType,
+        string? cookie,
+        string? referer,
+        bool useProxy,
+        bool allowRedirect,
+        string? host,
+        CancellationToken ct)
+    {
+        var attempts = 1;
+        if (useProxy && _pool.HasProxies)
+            attempts = Math.Min(ProxyAttempts, _pool.Items.Count);
+
+        HttpResponseMessage? last = null;
+        for (var i = 0; i < attempts; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var endpoint = useProxy ? _pool.Next() : null;
+            try
+            {
+                using (RotatingWebProxy.Pin(endpoint))
+                {
+                    last?.Dispose();
+                    last = await SendDirectOnceAsync(
+                        method, url, postBody, mediaType, cookie, referer, useProxy, allowRedirect, ct);
+                }
+
+                return last;
+            }
+            catch (Exception ex) when (IsTransient(ex, ct))
+            {
+                _logger.LogWarning(
+                    "Tracker proxy {Proxy} failed for {Host}: {Reason}",
+                    endpoint?.Url ?? "direct",
+                    host ?? url,
+                    ex.Message);
+
+                if (i == attempts - 1)
+                {
+                    last?.Dispose();
+                    return SynthesizeResponse(url, HttpStatusCode.ServiceUnavailable, html: null, cookies: []);
+                }
+            }
+        }
+
+        return last ?? SynthesizeResponse(url, HttpStatusCode.ServiceUnavailable, html: null, cookies: []);
+    }
+
+    private async Task<HttpResponseMessage> SendDirectOnceAsync(
+        HttpMethod method,
+        string url,
+        string? postBody,
+        string mediaType,
         string? cookie,
         string? referer,
         bool useProxy,
@@ -171,14 +234,21 @@ public class TrackerHttpClient
 
         var client = _httpClientFactory.CreateClient(clientName);
         var request = new HttpRequestMessage(method, url);
-        if (content is not null)
-            request.Content = content;
+        if (postBody is not null)
+            request.Content = new StringContent(postBody, Encoding.UTF8, mediaType);
         if (!string.IsNullOrEmpty(cookie))
             request.Headers.TryAddWithoutValidation("Cookie", cookie);
         if (!string.IsNullOrEmpty(referer))
             request.Headers.TryAddWithoutValidation("Referer", referer);
 
         return await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
+
+    private static bool IsTransient(Exception ex, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested)
+            return false;
+        return ex is HttpRequestException or IOException or TaskCanceledException or OperationCanceledException;
     }
 
     private async Task<HttpResponseMessage?> FetchViaFlareSolverrAsync(

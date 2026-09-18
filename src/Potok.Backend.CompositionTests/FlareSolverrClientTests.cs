@@ -84,6 +84,32 @@ public class FlareSolverrClientTests
     }
 
     [Fact]
+    public async Task GetAsync_Socks5Proxy_SentToFlareSolverrAsHttp()
+    {
+        var handler = new QueueHandler([
+            JsonOk("""{"status":"ok","message":"Session created"}"""),
+            JsonOk("""{"status":"ok","solution":{"status":200,"response":"<html>ok</html>","cookies":[]}}""")
+        ]);
+
+        var config = EnabledConfig();
+        config.Proxy.List.Add("socks5://qVmtrJ:vvyWFd@46.161.45.253:9740");
+
+        using var client = CreateClient(handler, config);
+        var solution = await client.GetAsync(
+            "https://rutracker.org/",
+            cookieHeader: null,
+            proxy: null,
+            CancellationToken.None);
+
+        Assert.NotNull(solution);
+        using var create = JsonDocument.Parse(handler.Bodies[0]);
+        var proxy = create.RootElement.GetProperty("proxy");
+        Assert.Equal("http://46.161.45.253:9740", proxy.GetProperty("url").GetString());
+        Assert.Equal("qVmtrJ", proxy.GetProperty("username").GetString());
+        Assert.Equal("vvyWFd", proxy.GetProperty("password").GetString());
+    }
+
+    [Fact]
     public async Task GetAsync_SessionFailure_RecreatesWithNextProxy()
     {
         var handler = new QueueHandler([
@@ -191,6 +217,15 @@ public class FlareSolverrClientTests
         cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+    }
+
+    [Fact]
+    public void ShortFlareMessage_DropsChromeStack()
+    {
+        var raw = "Error: Error solving the challenge. Message: unknown error: net::ERR_SOCKS_CONNECTION_FAILED\n  (Session info: chrome=152.0)\n#0 0xabc";
+        Assert.Equal(
+            "Error: Error solving the challenge. Message: unknown error: net::ERR_SOCKS_CONNECTION_FAILED",
+            FlareSolverrClient.ShortFlareMessage(raw));
     }
 
     [Fact]

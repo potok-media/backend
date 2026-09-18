@@ -140,12 +140,81 @@ public class TrackerHttpClientCloudflareTests
         CloudflareGuard guard)
     {
         var config = new Config { FlareSolverr = settings };
+        var monitor = new StaticOptionsMonitor<Config>(config);
         return new TrackerHttpClient(
             new StubHttpClientFactory(handler),
-            new StaticOptionsMonitor<Config>(config),
+            monitor,
             guard,
             flare,
+            new TrackerProxyPool(monitor),
             NullLogger<TrackerHttpClient>.Instance);
+    }
+
+    [Fact]
+    public async Task GetStringAsync_ProxyTransportError_RetriesNextProxy()
+    {
+        var flare = new FakeFlareSolverrClient();
+        var calls = 0;
+        var handler = new ScriptedHandler(_ =>
+        {
+            calls++;
+            if (calls == 1)
+                throw new HttpRequestException("proxy dead");
+            return OkHtml("<html>ok</html>");
+        });
+
+        var settings = EnabledSettings();
+        var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var guard = CreateGuard(settings, () => now);
+        var config = new Config
+        {
+            FlareSolverr = settings,
+            Proxy = new ProxySettings
+            {
+                List = ["http://p1.example:8080", "http://p2.example:8080"]
+            }
+        };
+        var monitor = new StaticOptionsMonitor<Config>(config);
+        var client = new TrackerHttpClient(
+            new StubHttpClientFactory(handler),
+            monitor,
+            guard,
+            flare,
+            new TrackerProxyPool(monitor),
+            NullLogger<TrackerHttpClient>.Instance);
+
+        var html = await client.GetStringAsync("https://rutor.info/search");
+
+        Assert.Equal("<html>ok</html>", html);
+        Assert.Equal(2, calls);
+        Assert.Empty(flare.Gets);
+    }
+
+    [Fact]
+    public async Task GetStringAsync_AllProxiesFail_ReturnsEmptyWithoutThrowing()
+    {
+        var flare = new FakeFlareSolverrClient();
+        var handler = new ScriptedHandler(_ => throw new HttpRequestException("eof"));
+        var settings = EnabledSettings();
+        var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var guard = CreateGuard(settings, () => now);
+        var config = new Config
+        {
+            FlareSolverr = settings,
+            Proxy = new ProxySettings { List = ["http://p1.example:8080", "http://p2.example:8080"] }
+        };
+        var monitor = new StaticOptionsMonitor<Config>(config);
+        var client = new TrackerHttpClient(
+            new StubHttpClientFactory(handler),
+            monitor,
+            guard,
+            flare,
+            new TrackerProxyPool(monitor),
+            NullLogger<TrackerHttpClient>.Instance);
+
+        var html = await client.GetStringAsync("https://kinozal.tv/browse.php");
+
+        Assert.Equal(string.Empty, html);
     }
 
     private static CloudflareGuard CreateGuard(FlareSolverrSettings settings, Func<DateTime> utcNow)

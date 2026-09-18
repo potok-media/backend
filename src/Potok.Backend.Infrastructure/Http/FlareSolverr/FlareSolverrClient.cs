@@ -15,6 +15,7 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
 
     private const int SessionCreateTimeoutMs = 60_000;
     private const int PingTimeoutMs = 15_000;
+    private const int ChallengeAttemptTimeoutMs = 40_000;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -189,21 +190,21 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
             Cmd = cmd,
             Session = session.Id,
             Url = url,
-            MaxTimeout = settings.MaxTimeoutMs,
+            MaxTimeout = Math.Min(settings.MaxTimeoutMs, ChallengeAttemptTimeoutMs),
             PostData = cmd == "request.post" ? postData ?? string.Empty : postData,
             Cookies = requestCookies.Count > 0 ? requestCookies : null,
             Proxy = ToProxyDto(proxy)
         };
 
-        var root = await CallAsync(settings, payload, settings.MaxTimeoutMs + 30_000, ct);
+        var root = await CallAsync(settings, payload, ChallengeAttemptTimeoutMs + 5_000, ct);
         if (root is null)
             return (FetchOutcome.BrowserFailed, null);
 
         if (!string.Equals(root.Status, "ok", StringComparison.OrdinalIgnoreCase))
         {
             var message = root.Message ?? "";
-            _logger.LogError("FlareSolverr refused: {Message}", message);
-            if (message.Contains("session", StringComparison.OrdinalIgnoreCase))
+            _logger.LogError("FlareSolverr refused: {Message}", ShortFlareMessage(message));
+            if (IsDeadSession(message))
                 session.Alive = false;
 
             return (FetchOutcome.BrowserFailed, null);
@@ -353,8 +354,47 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
         }
     }
 
-    private static FlareSolverrProxy? ToFlare(ProxyEndpoint? item) =>
-        item is null ? null : new FlareSolverrProxy(item.Url, item.Username, item.Password);
+    private static FlareSolverrProxy? ToFlare(ProxyEndpoint? item)
+    {
+        if (item is null)
+            return null;
+
+        // Chromium cannot authenticate SOCKS. Residential providers usually speak HTTP
+        // on the same host:port, and FlareSolverr/Chrome can do HTTP 407 auth.
+        var url = item.Url;
+        if (url.StartsWith("socks5://", StringComparison.OrdinalIgnoreCase)
+            || url.StartsWith("socks4://", StringComparison.OrdinalIgnoreCase))
+        {
+            var rest = url[(url.IndexOf("://", StringComparison.Ordinal) + 3)..];
+            url = "http://" + rest;
+        }
+
+        return new FlareSolverrProxy(url, item.Username, item.Password);
+    }
+
+    public static string ShortFlareMessage(string message)
+    {
+        if (string.IsNullOrEmpty(message))
+            return message;
+
+        var cut = message.IndexOf('\n');
+        if (cut > 0)
+            message = message[..cut];
+
+        var sessionInfo = message.IndexOf(" (Session info", StringComparison.Ordinal);
+        if (sessionInfo > 0)
+            message = message[..sessionInfo];
+
+        return message.Trim();
+    }
+
+    private static bool IsDeadSession(string message)
+    {
+        return message.Contains("session", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("timed out", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("ERR_SOCKS", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("Connection", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static FlareSolverrProxyDto? ToProxyDto(FlareSolverrProxy? proxy)
     {

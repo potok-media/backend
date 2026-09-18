@@ -23,7 +23,7 @@ public class TorrentsController : ControllerBase
             TmdbId = request.Id,
             Query = request.Query,
             Title = request.Title ?? request.Query,
-            TitleOriginal = request.OriginalTitle ?? "",
+            TitleOriginal = FirstNonEmpty(request.OriginalTitle, request.EnglishTitle),
             Year = int.TryParse(request.Year, out var y) ? y : 0,
             IsSerial = request.MediaType == "tv" ? 2 : 1,
             ForceSearch = request.ForceSearch ?? false
@@ -73,6 +73,17 @@ public class TorrentsController : ControllerBase
             if (summary is not null)
                 results[i] = results[i] with { Override = summary };
         }
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        }
+
+        return "";
     }
 
     // Infohashes stored on torrent_overrides are 40-char hex; skip Guid/url fallbacks used as Id.

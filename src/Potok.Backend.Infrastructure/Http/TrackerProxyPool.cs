@@ -72,6 +72,9 @@ public sealed class TrackerProxyPool
 
 public sealed class RotatingWebProxy : IWebProxy
 {
+    private static readonly AsyncLocal<ProxyEndpoint?> Pinned = new();
+    private static readonly AsyncLocal<bool> HasPin = new();
+
     private readonly TrackerProxyPool _pool;
 
     public RotatingWebProxy(TrackerProxyPool pool)
@@ -82,18 +85,53 @@ public sealed class RotatingWebProxy : IWebProxy
 
     public ICredentials? Credentials { get; set; }
 
+    /// <summary>
+    /// Pin one proxy for the current async flow so HTTPS CONNECT and the request share the same IP.
+    /// </summary>
+    public static IDisposable Pin(ProxyEndpoint? item)
+    {
+        var previous = Pinned.Value;
+        var previousPin = HasPin.Value;
+        Pinned.Value = item;
+        HasPin.Value = true;
+        return new RestorePin(previous, previousPin);
+    }
+
     public Uri? GetProxy(Uri destination)
     {
-        return _pool.Next()?.ProxyUri;
+        var item = HasPin.Value ? Pinned.Value : _pool.Next();
+        return item?.ProxyUri;
     }
 
     public bool IsBypassed(Uri host)
     {
-        if (!_pool.HasProxies)
+        if (!_pool.HasProxies && !HasPin.Value)
             return true;
         if (_pool.BypassOnLocal && host.IsLoopback)
             return true;
         return false;
+    }
+
+    private sealed class RestorePin : IDisposable
+    {
+        private readonly ProxyEndpoint? _previous;
+        private readonly bool _previousPin;
+        private bool _disposed;
+
+        public RestorePin(ProxyEndpoint? previous, bool previousPin)
+        {
+            _previous = previous;
+            _previousPin = previousPin;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            Pinned.Value = _previous;
+            HasPin.Value = _previousPin;
+        }
     }
 
     private sealed class PoolCredentials : ICredentials

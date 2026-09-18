@@ -97,6 +97,24 @@ public class TrackerProxyPoolTests
     }
 
     [Fact]
+    public void RotatingWebProxy_Pin_SticksForConnectAndRequest()
+    {
+        var pool = CreatePool("http://p1.example:8080", "http://p2.example:8080");
+        var proxy = new RotatingWebProxy(pool);
+        var dest = new Uri("https://kinozal.tv/");
+
+        using (RotatingWebProxy.Pin(pool.Next()))
+        {
+            var first = proxy.GetProxy(dest);
+            var again = proxy.GetProxy(dest);
+            Assert.Equal(first, again);
+            Assert.Equal(new Uri("http://p1.example:8080"), first);
+        }
+
+        Assert.Equal(new Uri("http://p2.example:8080"), proxy.GetProxy(dest));
+    }
+
+    [Fact]
     public void RotatingWebProxy_BypassesLoopbackWhenConfigured()
     {
         var pool = CreatePool(bypassOnLocal: true, "http://p1.example:8080");

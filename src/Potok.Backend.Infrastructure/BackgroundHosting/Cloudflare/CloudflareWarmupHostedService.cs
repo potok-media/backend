@@ -71,12 +71,20 @@ public sealed class CloudflareWarmupHostedService : BackgroundService
         if (!await EnsureSessionWithRetryAsync(ct))
             _logger.LogWarning("FlareSolverr session was not ready before warmup probes");
 
-        foreach (var url in urls)
-        {
-            if (ct.IsCancellationRequested)
-                return;
+        using var limit = new SemaphoreSlim(3, 3);
+        await Task.WhenAll(urls.Select(url => WarmUrlLimitedAsync(url, limit, ct)));
+    }
 
+    private async Task WarmUrlLimitedAsync(string url, SemaphoreSlim limit, CancellationToken ct)
+    {
+        await limit.WaitAsync(ct);
+        try
+        {
             await WarmUrlAsync(url, ct);
+        }
+        finally
+        {
+            limit.Release();
         }
     }
 
@@ -124,17 +132,12 @@ public sealed class CloudflareWarmupHostedService : BackgroundService
                 return;
             }
 
+            _guard.MarkGuarded(host);
             var ok = await _flareSolverr.WarmupAsync(url, ct);
             if (ok)
-            {
-                _guard.MarkGuarded(host);
                 _logger.LogInformation("FlareSolverr warmup ok for {Host}", host);
-            }
             else
-            {
-                _guard.Unguard(host);
-                _logger.LogWarning("FlareSolverr warmup failed for {Host}", host);
-            }
+                _logger.LogWarning("FlareSolverr warmup failed for {Host}; staying on the browser path", host);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

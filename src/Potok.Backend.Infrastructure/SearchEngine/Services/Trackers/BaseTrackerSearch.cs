@@ -57,7 +57,21 @@ public abstract class BaseTrackerSearch : ITrackerRefreshProvider
 
         try
         {
-            await repository.AddOrUpdateAsync(ordered, fetchDetails, ct);
+            await repository.AddOrUpdateAsync(ordered, async (torrent, token) =>
+            {
+                try
+                {
+                    return await fetchDetails(torrent, token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception)
+                {
+                    return false;
+                }
+            }, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
