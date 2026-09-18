@@ -68,7 +68,7 @@ public sealed class CloudflareWarmupHostedService : BackgroundService
 
         _logger.LogInformation("Cloudflare warmup: {Count} tracker origin(s)", urls.Count);
 
-        if (!await _flareSolverr.EnsureSessionAsync(ct))
+        if (!await EnsureSessionWithRetryAsync(ct))
             _logger.LogWarning("FlareSolverr session was not ready before warmup probes");
 
         foreach (var url in urls)
@@ -78,6 +78,38 @@ public sealed class CloudflareWarmupHostedService : BackgroundService
 
             await WarmUrlAsync(url, ct);
         }
+    }
+
+    private async Task<bool> EnsureSessionWithRetryAsync(CancellationToken ct)
+    {
+        const int maxAttempts = 12;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            if (await _flareSolverr.EnsureSessionAsync(ct))
+            {
+                if (attempt > 1)
+                    _logger.LogInformation("FlareSolverr session ready after {Attempts} attempt(s)", attempt);
+                return true;
+            }
+
+            var delay = TimeSpan.FromSeconds(Math.Min(15, 2 * attempt));
+            _logger.LogWarning(
+                "FlareSolverr not ready (attempt {Attempt}/{Max}), retry in {Delay}s",
+                attempt,
+                maxAttempts,
+                (int)delay.TotalSeconds);
+
+            try
+            {
+                await Task.Delay(delay, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     private async Task WarmUrlAsync(string url, CancellationToken ct)

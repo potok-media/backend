@@ -150,6 +150,20 @@ public class FlareSolverrClientTests
     }
 
     [Fact]
+    public async Task EnsureSessionAsync_CallerCanceled_Throws()
+    {
+        var handler = new HangHandler();
+        using var client = CreateClient(handler);
+        using var cts = new CancellationTokenSource();
+
+        var task = client.EnsureSessionAsync(cts.Token);
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+    }
+
+    [Fact]
     public async Task GetAsync_Disabled_ReturnsNullWithoutHttp()
     {
         var handler = new QueueHandler([]);
@@ -161,12 +175,12 @@ public class FlareSolverrClientTests
         Assert.Empty(handler.Bodies);
     }
 
-    private static FlareSolverrClient CreateClient(QueueHandler handler, bool enabled = true)
+    private static FlareSolverrClient CreateClient(HttpMessageHandler handler, bool enabled = true)
     {
         return CreateClient(handler, EnabledConfig(enabled));
     }
 
-    private static FlareSolverrClient CreateClient(QueueHandler handler, Config config)
+    private static FlareSolverrClient CreateClient(HttpMessageHandler handler, Config config)
     {
         var monitor = new StaticOptionsMonitor<Config>(config);
         return new FlareSolverrClient(
@@ -205,6 +219,20 @@ public class FlareSolverrClientTests
         public SingleClientFactory(HttpClient client) => _client = client;
 
         public HttpClient CreateClient(string name) => _client;
+    }
+
+    private sealed class HangHandler : HttpMessageHandler
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new InvalidOperationException("hang");
+        }
     }
 
     private sealed class QueueHandler : HttpMessageHandler

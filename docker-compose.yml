@@ -40,7 +40,7 @@ services:
       db:
         condition: service_healthy
       flaresolverr:
-        condition: service_started
+        condition: service_healthy
 
   # Cloudflare challenge solver for RU trackers (rutracker.org etc.).
   # SearchEngine talks to it on the compose network. Do not publish 8191.
@@ -51,6 +51,14 @@ services:
     environment:
       - LOG_LEVEL=info
       - TZ=Europe/Moscow
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8191/health', timeout=3)"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   # 🌊 BitTorrent streaming engine (TorrentGo)
   potok-torrentgo:

@@ -120,16 +120,26 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
         {
             var egress = proxy ?? _pool.StickyFlareProxy();
 
-            if (!_sessionAlive && !await CreateSessionAsync(settings, egress, ct))
+            // Chrome launch is shared. A tracker 60s budget must not abort sessions.create
+            // for everyone else waiting on the same browser.
+            if (!_sessionAlive && !await CreateSessionAsync(settings, egress, CancellationToken.None))
+                return null;
+
+            if (ct.IsCancellationRequested)
                 return null;
 
             var (outcome, solution) = await RequestAsync(settings, cmd, url, postData, cookieHeader, egress, ct);
 
             if (outcome == FetchOutcome.BrowserFailed)
             {
-                await DestroySessionAsync(settings, ct);
+                await DestroySessionAsync(settings, CancellationToken.None);
+                if (ct.IsCancellationRequested)
+                    return null;
+
                 egress = proxy ?? _pool.StickyFlareProxy();
-                if (!await CreateSessionAsync(settings, egress, ct))
+                if (!await CreateSessionAsync(settings, egress, CancellationToken.None))
+                    return null;
+                if (ct.IsCancellationRequested)
                     return null;
 
                 (outcome, solution) = await RequestAsync(settings, cmd, url, postData, cookieHeader, egress, ct);
@@ -215,7 +225,7 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
                 Session = SessionName,
                 Proxy = ToProxyDto(proxy)
             },
-            settings.MaxTimeoutMs + 30_000,
+            SessionCreateTimeoutMs,
             ct);
 
         var ok = root is not null &&
@@ -233,7 +243,7 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
         else
         {
             _pool.ClearSticky();
-            _logger.LogError("FlareSolverr session create failed: {Message}", root?.Message);
+            _logger.LogWarning("FlareSolverr session create failed: {Message}", root?.Message ?? "no response");
         }
 
         return ok;
@@ -302,6 +312,8 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
         }
     }
 
+    private const int SessionCreateTimeoutMs = 60_000;
+
     private async Task<FlareSolverrApiResponse?> CallAsync(
         FlareSolverrSettings settings,
         FlareSolverrRequest payload,
@@ -320,15 +332,20 @@ public sealed class FlareSolverrClient : IFlareSolverrClient, IDisposable
             var body = await response.Content.ReadAsStringAsync(cts.Token);
             return JsonSerializer.Deserialize<FlareSolverrApiResponse>(body, JsonOptions);
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            _logger.LogError("FlareSolverr timed out talking to {Url}", settings.Url);
+            _sessionAlive = false;
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("FlareSolverr timed out after {Timeout}ms at {Url}", timeoutMs, settings.Url);
             _sessionAlive = false;
             return null;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "FlareSolverr is unreachable at {Url}", settings.Url);
+            _logger.LogWarning(ex, "FlareSolverr is unreachable at {Url}", settings.Url);
             _sessionAlive = false;
             return null;
         }
