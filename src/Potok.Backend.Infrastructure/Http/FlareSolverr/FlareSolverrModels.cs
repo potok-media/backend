@@ -14,7 +14,7 @@ internal sealed class FlareSolverrRequest
     public required string Cmd { get; init; }
 
     [JsonPropertyName("session")]
-    public required string Session { get; init; }
+    public string? Session { get; init; }
 
     [JsonPropertyName("url")]
     public string? Url { get; init; }
@@ -63,6 +63,9 @@ internal sealed class FlareSolverrApiResponse
 
     [JsonPropertyName("solution")]
     public FlareSolverrApiSolution? Solution { get; set; }
+
+    [JsonPropertyName("sessions")]
+    public List<string>? Sessions { get; set; }
 }
 
 internal sealed class FlareSolverrApiSolution
